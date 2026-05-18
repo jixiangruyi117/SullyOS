@@ -1525,6 +1525,111 @@ const LineQueueView: React.FC<{
 };
 
 // ============================================================
+// WakeUpView — "梦醒"时刻：黑→晨光淡入，"醒 来"浮现，然后对白
+// ============================================================
+
+const WakeUpView: React.FC<{
+    lines: string[];
+    charName: string;
+    onComplete: () => void;
+}> = ({ lines, charName, onComplete }) => {
+    const [stage, setStage] = useState<'dim' | 'awakening' | 'dialog'>('dim');
+    const [idx, setIdx] = useState(0);
+
+    useEffect(() => {
+        const t1 = setTimeout(() => setStage('awakening'), 1100);
+        const t2 = setTimeout(() => setStage('dialog'), 3300);
+        return () => { clearTimeout(t1); clearTimeout(t2); };
+    }, []);
+
+    const isLast = idx >= lines.length - 1;
+    const advance = () => { if (isLast) onComplete(); else setIdx(i => i + 1); };
+
+    const bg =
+        stage === 'dim' ? '#0e0608' :
+        stage === 'awakening' ? 'linear-gradient(180deg, #0e0608 0%, #3a1f1a 35%, #b27566 75%, #fde8d4 100%)' :
+        'linear-gradient(180deg, #faf3e7 0%, #f5ead4 40%, #f3dcd8 100%)';
+
+    return (
+        <div
+            className="l520-root"
+            style={{
+                background: bg,
+                transition: 'background 1.8s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+        >
+            <Like520StyleTag />
+            <style>{`
+                @keyframes l520-wake-text-in {
+                    0%   { opacity: 0; letter-spacing: 24px; }
+                    40%  { opacity: 1; letter-spacing: 10px; }
+                    80%  { opacity: 1; letter-spacing: 10px; }
+                    100% { opacity: 0; letter-spacing: 14px; }
+                }
+            `}</style>
+
+            {/* "醒 来" 中央浮现 */}
+            {stage === 'awakening' && (
+                <div
+                    style={{
+                        position: 'absolute',
+                        inset: 0,
+                        display: 'grid',
+                        placeItems: 'center',
+                        color: 'rgba(255, 248, 236, 0.92)',
+                        fontFamily: "'Noto Serif SC', serif",
+                        fontWeight: 300,
+                        fontSize: 18,
+                        letterSpacing: 10,
+                        textIndent: 10,
+                        textShadow: '0 0 16px rgba(212, 177, 106, 0.6)',
+                        animation: 'l520-wake-text-in 2.2s ease-out both',
+                        pointerEvents: 'none',
+                    }}
+                >
+                    醒 · 来
+                </div>
+            )}
+
+            {/* dialog 阶段：完整装饰 + 对白 */}
+            {stage === 'dialog' && (
+                <>
+                    <CornerOrnaments />
+                    <AmbientLayer />
+                    <div style={{ flex: 1 }} />
+                    <div
+                        style={{
+                            position: 'relative',
+                            zIndex: 3,
+                            paddingBottom: 28,
+                            animation: 'l520-fade-in 0.8s ease-out both',
+                        }}
+                    >
+                        <OrnateDialog
+                            charName={charName}
+                            onAdvance={advance}
+                            showArrow
+                            arrowText={isLast ? '— continue —' : '— next —'}
+                            tall
+                        >
+                            <div key={idx} className="body-text" style={{ animation: 'l520-fade-in 0.6s ease-out both' }}>
+                                {lines[idx]}
+                            </div>
+                        </OrnateDialog>
+                    </div>
+                    <style>{`
+                        @keyframes l520-fade-in {
+                            from { opacity: 0; transform: translateY(8px); }
+                            to   { opacity: 1; transform: translateY(0); }
+                        }
+                    `}</style>
+                </>
+            )}
+        </div>
+    );
+};
+
+// ============================================================
 // UncoveredLineView — 第二次捏脸后的长篇真心话
 // 双 chibi 居中、user chibi 摇摆挪入
 // ============================================================
@@ -2274,7 +2379,7 @@ export const Like520Session: React.FC<SessionProps> = ({ charId, onClose }) => {
             {phase === 'loading_b' && <LoadingView hint="醒过来之前…" />}
 
             {phase === 'wake_up' && callB && (
-                <LineQueueView
+                <WakeUpView
                     lines={callB.wake_up}
                     charName={char.name}
                     onComplete={() => setPhase('letter')}
