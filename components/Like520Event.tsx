@@ -871,18 +871,22 @@ const LIKE520_CSS = `
 }
 .l520-letter-paper {
   position: relative;
-  background: linear-gradient(180deg, #fffcf3 0%, #f9efd9 100%);
+  background: linear-gradient(180deg, #fffefb 0%, #fbf6ec 100%);
   border-radius: 4px;
   padding: 32px 26px 28px;
-  box-shadow: 0 12px 32px rgba(74,36,24,0.18), 0 0 0 1px var(--gold), 0 0 0 4px var(--ivory), 0 0 0 5px var(--gold-light);
-  background-image: repeating-linear-gradient(transparent, transparent 28px, rgba(184,146,63,0.05) 28px, rgba(184,146,63,0.05) 29px);
+  box-shadow:
+    0 12px 32px rgba(160,120,90,0.12),
+    0 0 0 1px rgba(212,177,106,0.45),
+    0 0 0 4px #fffaf0,
+    0 0 0 5px rgba(212,177,106,0.35);
+  background-image: repeating-linear-gradient(transparent, transparent 28px, rgba(184,146,63,0.035) 28px, rgba(184,146,63,0.035) 29px);
 }
 .l520-letter-paper::before, .l520-letter-paper::after,
 .l520-letter-paper .lp-tl, .l520-letter-paper .lp-tr {
   content: '';
   position: absolute;
   width: 16px; height: 16px;
-  border: 1px solid var(--burgundy);
+  border: 1px solid rgba(157,107,120,0.55);
 }
 .l520-letter-paper::before { top: 8px; left: 8px; border-right: none; border-bottom: none; }
 .l520-letter-paper::after  { top: 8px; right: 8px; border-left: none; border-bottom: none; }
@@ -896,7 +900,7 @@ const LIKE520_CSS = `
   font-family: 'Cormorant Garamond', serif;
   font-style: italic;
   font-size: 12px;
-  color: var(--gold-deep);
+  color: #b89460;
   letter-spacing: 4px;
   margin-bottom: 6px;
 }
@@ -904,13 +908,13 @@ const LIKE520_CSS = `
   font-family: 'Noto Serif SC', serif;
   font-weight: 500;
   font-size: 22px;
-  color: var(--burgundy);
+  color: #9d6b78;
   letter-spacing: 8px;
   text-indent: 8px;
   margin: 4px 0 10px;
 }
 .l520-letter-divider {
-  color: var(--gold);
+  color: rgba(184,146,63,0.7);
   font-size: 12px;
   letter-spacing: 10px;
 }
@@ -918,7 +922,7 @@ const LIKE520_CSS = `
   font-family: 'Noto Serif SC', serif;
   font-size: 14.5px;
   line-height: 2.1;
-  color: var(--ink);
+  color: #5a4a40;
   letter-spacing: 0.6px;
   text-indent: 2em;
   white-space: pre-wrap;
@@ -927,10 +931,10 @@ const LIKE520_CSS = `
 .l520-letter-foot {
   text-align: right;
   padding-top: 8px;
-  border-top: 0.5px dashed rgba(184,146,63,0.3);
+  border-top: 0.5px dashed rgba(184,146,63,0.25);
 }
 .l520-letter-flourish {
-  color: var(--gold);
+  color: rgba(184,146,63,0.7);
   font-size: 12px;
   letter-spacing: 6px;
   margin: 6px 0 8px;
@@ -938,7 +942,7 @@ const LIKE520_CSS = `
 .l520-letter-signature {
   font-family: 'Noto Serif SC', serif;
   font-size: 14px;
-  color: var(--burgundy);
+  color: #9d6b78;
   letter-spacing: 4px;
   text-indent: 4px;
   margin-bottom: 8px;
@@ -947,29 +951,29 @@ const LIKE520_CSS = `
   display: inline-block;
   width: 36px; height: 36px;
   border-radius: 50%;
-  background: var(--burgundy-grad);
-  color: var(--gold-light);
+  background: linear-gradient(135deg, #c89aa5 0%, #9d6b78 70%, #7d5460 100%);
+  color: #fff5e8;
   line-height: 36px;
   text-align: center;
   font-size: 16px;
-  box-shadow: 0 3px 6px rgba(74,36,24,0.4), inset 0 1px 0 rgba(255,255,255,0.18);
+  box-shadow: 0 3px 6px rgba(125,84,96,0.25), inset 0 1px 0 rgba(255,255,255,0.22);
   transform: rotate(-8deg);
-  border: 1px solid var(--gold);
+  border: 1px solid rgba(212,177,106,0.6);
 }
 .l520-letter-accept {
   display: block;
   margin: 16px auto 8px;
   padding: 11px 30px;
-  background: var(--burgundy-grad);
-  color: #fff8ec;
+  background: linear-gradient(135deg, #c89aa5 0%, #9d6b78 70%, #7d5460 100%);
+  color: #fffaf0;
   font-family: 'Noto Serif SC', serif;
   font-size: 13.5px;
   letter-spacing: 4px;
   text-indent: 4px;
-  border: 1px solid var(--gold);
+  border: 1px solid rgba(212,177,106,0.6);
   border-radius: 2px;
   cursor: pointer;
-  box-shadow: 0 5px 12px rgba(74,36,24,0.35), inset 0 1px 0 rgba(255,255,255,0.15);
+  box-shadow: 0 5px 12px rgba(125,84,96,0.22), inset 0 1px 0 rgba(255,255,255,0.18);
   transition: transform .15s ease;
   position: relative;
 }
@@ -2268,7 +2272,7 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
             const html2canvas = await loadH2C;
             const target = saveAreaRef.current;
             if (!target) return;
-            const canvas = await html2canvas(target, { backgroundColor: '#f3e2bc', scale: 2, useCORS: true });
+            const canvas = await html2canvas(target, { backgroundColor: '#f9f2e1', scale: 2, useCORS: true });
             const url = canvas.toDataURL('image/png');
             const a = document.createElement('a');
             a.href = url;
@@ -2292,9 +2296,9 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
                     style={{
                         position: 'relative',
                         padding: '28px 22px',
-                        background: 'radial-gradient(ellipse at top, #f9ecc6 0%, #f3e2bc 60%, #ebd6a5 100%)',
+                        background: 'radial-gradient(ellipse at top, #fefbf4 0%, #f9f2e1 60%, #f1e7d0 100%)',
                         borderRadius: 6,
-                        boxShadow: 'inset 0 0 60px rgba(122,46,58,0.12), inset 0 0 0 1px rgba(184,146,63,0.4)',
+                        boxShadow: 'inset 0 0 50px rgba(157,107,120,0.06), inset 0 0 0 1px rgba(212,177,106,0.32)',
                     }}
                 >
                     <div className="l520-letter-paper" ref={letterRef}>
@@ -2315,7 +2319,7 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
                     <div style={{
                         position: 'absolute', top: 8, left: 8, right: 8, bottom: 8,
                         pointerEvents: 'none',
-                        border: '0.5px solid rgba(184,146,63,0.55)',
+                        border: '0.5px solid rgba(212,177,106,0.42)',
                         borderRadius: 3,
                     }} />
                     <div style={{
@@ -2325,7 +2329,7 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
                         fontStyle: 'italic',
                         fontSize: 9,
                         letterSpacing: 6,
-                        color: 'rgba(122,46,58,0.55)',
+                        color: 'rgba(157,107,120,0.5)',
                     }}>
                         — 5 · 20 · MMXXVI —
                     </div>
@@ -2336,17 +2340,17 @@ const LetterView: React.FC<{ text: string; onNext: () => void; onClose: () => vo
                         disabled={saving}
                         style={{
                             padding: '9px 18px',
-                            background: 'linear-gradient(180deg, #fff8ec, #f5ead4)',
-                            color: '#7a2e3a',
+                            background: 'linear-gradient(180deg, #fffefb, #f7eedb)',
+                            color: '#9d6b78',
                             fontFamily: "'Noto Serif SC', serif",
                             fontSize: 12,
                             letterSpacing: 3,
                             textIndent: 3,
-                            border: '1px solid #b8923f',
+                            border: '1px solid rgba(212,177,106,0.65)',
                             borderRadius: 2,
                             cursor: saving ? 'wait' : 'pointer',
                             opacity: saving ? 0.6 : 1,
-                            boxShadow: '0 3px 8px rgba(122,46,58,0.18)',
+                            boxShadow: '0 3px 8px rgba(157,107,120,0.12)',
                         }}
                     >
                         {saving ? '⏳ 出件中…' : '存 为 图 片'}
