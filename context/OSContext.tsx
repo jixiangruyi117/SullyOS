@@ -1182,11 +1182,21 @@ export const OSProvider: React.FC<{ children: React.ReactNode }> = ({ children }
           }
       };
 
+      // Phase 1: per-chunk UI refresh side-channel. push 路径下的 applyAssistantPostProcessing
+      // 会逐条 saveMessage + fire 'active-msg-progress'; 这里只推 lastMsgTimestamp 让
+      // Chat.tsx 的 useEffect 重新 reloadMessages, 不弹 toast / 不增加未读 / 不 resolve
+      // sendInstantPush 那条 one-shot promise (那些只在 'active-msg-received' 触发一次)。
+      const progressHandler = () => {
+          setLastMsgTimestamp(Date.now());
+      };
+
       window.addEventListener('active-msg-received', handler);
+      window.addEventListener('active-msg-progress', progressHandler);
       window.addEventListener('active-msg-open', openHandler);
       document.addEventListener('visibilitychange', onVisible);
       return () => {
           window.removeEventListener('active-msg-received', handler);
+          window.removeEventListener('active-msg-progress', progressHandler);
           window.removeEventListener('active-msg-open', openHandler);
           document.removeEventListener('visibilitychange', onVisible);
       };

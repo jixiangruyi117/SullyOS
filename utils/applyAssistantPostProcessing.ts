@@ -273,9 +273,13 @@ export async function applyAssistantPostProcessing(
         commentParentIdCache: commentParentIdCacheRef,
     } = xhsCaches;
 
-    // Phase 0 标记位 — Phase 1/2 会让这两个变成真值并跳过对应分支; Phase 0 始终为假, 全走原逻辑。
-    // 留为局部变量供未来分支使用; 当前 Phase 0 不读, 仅做 no-op 形参声明。
-    void skipSecondPassLLM;
+    // Phase 1: skipSecondPassLLM=true (instant push 路径) 时, 跳过所有需要回连 LLM 的
+    // 二轮分支 (RECALL / SEARCH / READ_DIARY / FS_READ_DIARY / READ_NOTE / XHS_*)。
+    // 这些 tag 留在原文里, 由后面 Step 6 的 ChatParser.sanitize 兜底剥掉 (chatParser.ts:225
+    // 的正则覆盖 ACTION/RECALL/SEARCH/DIARY/READ_DIARY/FS_DIARY/FS_READ_DIARY/...),
+    // XHS_* / READ_NOTE 兜底用 Step 12 的 hasDisplayContent + per-chunk sanitize 再清一遍。
+    // 写日记类 (DIARY / FS_DIARY) 不走 LLM, 属于纯副作用 (像 POKE), 客户端可以直接执行。
+    // Phase 2: directives 非空时只重放结构化指令, 暂时未启用, 留为预留接口。
     void directives;
 
     /** 将笔记列表的 xsecToken 和 title 存入缓存 */
@@ -308,7 +312,7 @@ export async function applyAssistantPostProcessing(
 
     // 5. Handle Recall (Loop if needed)
     const recallMatch = aiContent.match(/\[\[RECALL:\s*(\d{4})[-/年](\d{1,2})\]\]/);
-    if (recallMatch) {
+    if (!skipSecondPassLLM && recallMatch) {
         const year = recallMatch[1];
         const month = recallMatch[2];
         const targetMonth = `${year}-${month.padStart(2, '0')}`;
@@ -354,7 +358,7 @@ export async function applyAssistantPostProcessing(
 
     // 5.5 Handle Active Search (主动搜索)
     const searchMatch = aiContent.match(/\[\[SEARCH:\s*(.+?)\]\]/);
-    if (searchMatch && realtimeConfig?.newsEnabled && realtimeConfig?.newsApiKey) {
+    if (!skipSecondPassLLM && searchMatch && realtimeConfig?.newsEnabled && realtimeConfig?.newsApiKey) {
         const searchQuery = searchMatch[1].trim();
         console.log('🔍 [Search] AI触发搜索:', searchQuery);
         setSearchStatus(`正在搜索: ${searchQuery}...`);
@@ -514,7 +518,7 @@ export async function applyAssistantPostProcessing(
         return '';
     };
 
-    if (readDiaryMatch) {
+    if (!skipSecondPassLLM && readDiaryMatch) {
         const dateInput = readDiaryMatch[1].trim();
         console.log('📖 [ReadDiary] AI想翻阅日记:', dateInput);
 
@@ -679,7 +683,7 @@ export async function applyAssistantPostProcessing(
 
     // 5.9 Handle Feishu Read Diary
     const fsReadDiaryMatch = aiContent.match(/\[\[FS_READ_DIARY:\s*(.+?)\]\]/);
-    if (fsReadDiaryMatch) {
+    if (!skipSecondPassLLM && fsReadDiaryMatch) {
         const dateInput = fsReadDiaryMatch[1].trim();
         console.log('📖 [Feishu ReadDiary] AI想翻阅飞书日记:', dateInput);
 
@@ -767,7 +771,7 @@ export async function applyAssistantPostProcessing(
 
     // 5.9b Handle Read User Note
     const readNoteMatch = aiContent.match(/\[\[READ_NOTE:\s*(.+?)\]\]/);
-    if (readNoteMatch) {
+    if (!skipSecondPassLLM && readNoteMatch) {
         const keyword = readNoteMatch[1].trim();
         console.log('📝 [ReadNote] AI想翻阅用户笔记:', keyword);
 
@@ -857,7 +861,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_SEARCH: 关键词]]
     const xhsSearchMatch = aiContent.match(/\[\[XHS_SEARCH:\s*(.+?)\]\]/);
-    if (xhsSearchMatch && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsSearchMatch && xhsConf.enabled) {
         const keyword = xhsSearchMatch[1].trim();
         console.log(`📕 [XHS] AI想搜索小红书:`, keyword);
         setXhsStatus(`正在小红书搜索: ${keyword}...`);
@@ -901,14 +905,14 @@ export async function applyAssistantPostProcessing(
             aiContent = aiContent.replace(xhsSearchMatch[0], '').trim();
         }
         setXhsStatus('');
-    } else if (xhsSearchMatch) {
+    } else if (!skipSecondPassLLM && xhsSearchMatch) {
         aiContent = aiContent.replace(xhsSearchMatch[0], '').trim();
     }
     aiContent = aiContent.replace(/\[\[XHS_SEARCH:.*?\]\]/g, '').trim();
 
     // [[XHS_BROWSE]] or [[XHS_BROWSE: 分类]]
     const xhsBrowseMatch = aiContent.match(/\[\[XHS_BROWSE(?::\s*(.+?))?\]\]/);
-    if (xhsBrowseMatch && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsBrowseMatch && xhsConf.enabled) {
         const category = xhsBrowseMatch[1]?.trim();
         console.log(`📕 [XHS] AI想刷小红书:`, category || '首页推荐');
         setXhsStatus('正在刷小红书...');
@@ -946,13 +950,13 @@ export async function applyAssistantPostProcessing(
             aiContent = aiContent.replace(xhsBrowseMatch[0], '').trim();
         }
         setXhsStatus('');
-    } else if (xhsBrowseMatch) {
+    } else if (!skipSecondPassLLM && xhsBrowseMatch) {
         aiContent = aiContent.replace(xhsBrowseMatch[0], '').trim();
     }
     aiContent = aiContent.replace(/\[\[XHS_BROWSE(?::.*?)?\]\]/g, '').trim();
 
     // [[XHS_SHARE: 序号]]
-    const xhsShareMatches = aiContent.matchAll(/\[\[XHS_SHARE:\s*(\d+)\]\]/g);
+    const xhsShareMatches: Iterable<RegExpMatchArray> = skipSecondPassLLM ? [] : aiContent.matchAll(/\[\[XHS_SHARE:\s*(\d+)\]\]/g);
     for (const shareMatch of xhsShareMatches) {
         const idx = parseInt(shareMatch[1]) - 1;
         if (idx >= 0 && idx < lastXhsNotes.length) {
@@ -972,7 +976,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_POST: 标题 | 内容 | #标签1 #标签2]]
     const xhsPostMatch = aiContent.match(/\[\[XHS_POST:\s*(.+?)\]\]/s);
-    if (xhsPostMatch && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsPostMatch && xhsConf.enabled) {
         const postRaw = xhsPostMatch[1].trim();
         const parts = postRaw.split('|').map(p => p.trim());
         const postTitle = parts[0] || '';
@@ -1003,14 +1007,14 @@ export async function applyAssistantPostProcessing(
         }
         aiContent = aiContent.replace(xhsPostMatch[0], '').trim();
         setXhsStatus('');
-    } else if (xhsPostMatch) {
+    } else if (!skipSecondPassLLM && xhsPostMatch) {
         aiContent = aiContent.replace(xhsPostMatch[0], '').trim();
     }
     aiContent = aiContent.replace(/\[\[XHS_POST:.*?\]\]/gs, '').trim();
 
     // [[XHS_COMMENT: noteId | 评论内容]]
     const xhsCommentMatch = aiContent.match(/\[\[XHS_COMMENT:\s*(.+?)\]\]/);
-    if (xhsCommentMatch && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsCommentMatch && xhsConf.enabled) {
         const commentRaw = xhsCommentMatch[1].trim();
         const sepIdx = commentRaw.indexOf('|');
         if (sepIdx > 0) {
@@ -1039,14 +1043,14 @@ export async function applyAssistantPostProcessing(
         }
         aiContent = aiContent.replace(xhsCommentMatch[0], '').trim();
         setXhsStatus('');
-    } else if (xhsCommentMatch) {
+    } else if (!skipSecondPassLLM && xhsCommentMatch) {
         aiContent = aiContent.replace(xhsCommentMatch[0], '').trim();
     }
     aiContent = aiContent.replace(/\[\[XHS_COMMENT:.*?\]\]/g, '').trim();
 
     // [[XHS_REPLY: noteId | commentId | 回复内容]] (first pass; before LIKE/FAV)
     const xhsReplyMatch = aiContent.match(/\[\[XHS_REPLY:\s*(.+?)\]\]/);
-    if (xhsReplyMatch && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsReplyMatch && xhsConf.enabled) {
         const parts = xhsReplyMatch[1].split('|').map(s => s.trim());
         if (parts.length >= 3) {
             const [noteId, commentId, ...replyParts] = parts;
@@ -1101,13 +1105,13 @@ export async function applyAssistantPostProcessing(
             }
         }
         aiContent = aiContent.replace(xhsReplyMatch[0], '').trim();
-    } else if (xhsReplyMatch) {
+    } else if (!skipSecondPassLLM && xhsReplyMatch) {
         aiContent = aiContent.replace(xhsReplyMatch[0], '').trim();
     }
     aiContent = aiContent.replace(/\[\[XHS_REPLY:.*?\]\]/g, '').trim();
 
     // [[XHS_LIKE: noteId]]
-    const xhsLikeMatches = aiContent.matchAll(/\[\[XHS_LIKE:\s*(.+?)\]\]/g);
+    const xhsLikeMatches: Iterable<RegExpMatchArray> = skipSecondPassLLM ? [] : aiContent.matchAll(/\[\[XHS_LIKE:\s*(.+?)\]\]/g);
     for (const xhsLikeMatch of xhsLikeMatches) {
         if (xhsConf.enabled) {
             const noteId = xhsLikeMatch[1].trim();
@@ -1126,7 +1130,7 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_LIKE:.*?\]\]/g, '').trim();
 
     // [[XHS_FAV: noteId]]
-    const xhsFavMatches = aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
+    const xhsFavMatches: Iterable<RegExpMatchArray> = skipSecondPassLLM ? [] : aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
     for (const xhsFavMatch of xhsFavMatches) {
         if (xhsConf.enabled) {
             const noteId = xhsFavMatch[1].trim();
@@ -1146,7 +1150,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_MY_PROFILE]]
     const xhsProfileMatch = aiContent.match(/\[\[XHS_MY_PROFILE\]\]/);
-    if (xhsProfileMatch && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsProfileMatch && xhsConf.enabled) {
         console.log(`📕 [XHS] AI要查看自己的主页`);
         setXhsStatus('正在查看小红书主页...');
 
@@ -1252,14 +1256,14 @@ export async function applyAssistantPostProcessing(
             aiContent = aiContent.replace(xhsProfileMatch[0], '').trim();
         }
         setXhsStatus('');
-    } else if (xhsProfileMatch) {
+    } else if (!skipSecondPassLLM && xhsProfileMatch) {
         aiContent = aiContent.replace(xhsProfileMatch[0], '').trim();
     }
     aiContent = aiContent.replace(/\[\[XHS_MY_PROFILE\]\]/g, '').trim();
 
     // [[XHS_DETAIL: noteId]]
     const xhsDetailMatch = aiContent.match(/\[\[XHS_DETAIL:\s*(.+?)\]\]/);
-    if (xhsDetailMatch && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsDetailMatch && xhsConf.enabled) {
         const noteId = xhsDetailMatch[1].trim();
         let xsecToken = findXsecToken(noteId, lastXhsNotes);
         console.log(`📕 [XHS] AI要查看笔记详情:`, noteId, xsecToken ? '(有xsecToken)' : '(无xsecToken)');
@@ -1417,7 +1421,7 @@ export async function applyAssistantPostProcessing(
             aiContent = aiContent.replace(xhsDetailMatch[0], '').trim();
         }
         setXhsStatus('');
-    } else if (xhsDetailMatch) {
+    } else if (!skipSecondPassLLM && xhsDetailMatch) {
         aiContent = aiContent.replace(xhsDetailMatch[0], '').trim();
     }
     aiContent = aiContent.replace(/\[\[XHS_DETAIL:.*?\]\]/g, '').trim();
@@ -1425,7 +1429,7 @@ export async function applyAssistantPostProcessing(
     // 5.10.1 Second-round XHS action processing
     // [[XHS_COMMENT: noteId | 评论内容]] (second round)
     const xhsCommentMatch2 = aiContent.match(/\[\[XHS_COMMENT:\s*(.+?)\]\]/);
-    if (xhsCommentMatch2 && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsCommentMatch2 && xhsConf.enabled) {
         const commentRaw = xhsCommentMatch2[1].trim();
         const sepIdx = commentRaw.indexOf('|');
         if (sepIdx > 0) {
@@ -1457,7 +1461,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_REPLY]] (second round)
     const xhsReplyMatch2 = aiContent.match(/\[\[XHS_REPLY:\s*(.+?)\]\]/);
-    if (xhsReplyMatch2 && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsReplyMatch2 && xhsConf.enabled) {
         const parts = xhsReplyMatch2[1].split('|').map(s => s.trim());
         if (parts.length >= 3) {
             const [noteId, commentId, ...replyParts] = parts;
@@ -1515,7 +1519,7 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_REPLY:.*?\]\]/g, '').trim();
 
     // [[XHS_LIKE]] (second round)
-    const xhsLikeMatches2 = aiContent.matchAll(/\[\[XHS_LIKE:\s*(.+?)\]\]/g);
+    const xhsLikeMatches2: Iterable<RegExpMatchArray> = skipSecondPassLLM ? [] : aiContent.matchAll(/\[\[XHS_LIKE:\s*(.+?)\]\]/g);
     for (const xhsLikeMatch of xhsLikeMatches2) {
         if (xhsConf.enabled) {
             const noteId = xhsLikeMatch[1].trim();
@@ -1534,7 +1538,7 @@ export async function applyAssistantPostProcessing(
     aiContent = aiContent.replace(/\[\[XHS_LIKE:.*?\]\]/g, '').trim();
 
     // [[XHS_FAV]] (second round)
-    const xhsFavMatches2 = aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
+    const xhsFavMatches2: Iterable<RegExpMatchArray> = skipSecondPassLLM ? [] : aiContent.matchAll(/\[\[XHS_FAV:\s*(.+?)\]\]/g);
     for (const xhsFavMatch of xhsFavMatches2) {
         if (xhsConf.enabled) {
             const noteId = xhsFavMatch[1].trim();
@@ -1554,7 +1558,7 @@ export async function applyAssistantPostProcessing(
 
     // [[XHS_POST]] (second round - after MY_PROFILE)
     const xhsPostMatch2 = aiContent.match(/\[\[XHS_POST:\s*(.+?)\]\]/s);
-    if (xhsPostMatch2 && xhsConf.enabled) {
+    if (!skipSecondPassLLM && xhsPostMatch2 && xhsConf.enabled) {
         const postRaw = xhsPostMatch2[1].trim();
         const parts = postRaw.split('|').map(p => p.trim());
         const postTitle = parts[0] || '';
