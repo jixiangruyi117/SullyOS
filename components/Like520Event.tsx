@@ -12,6 +12,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useOS } from '../context/OSContext';
 import { DB } from '../utils/db';
 import { CharacterProfile, SpecialMomentRecord } from '../types';
+import { safeResponseJson } from '../utils/safeApi';
 import {
     runLike520CallA,
     runLike520CallB,
@@ -3438,18 +3439,126 @@ export const Like520Session: React.FC<SessionProps> = ({ charId, onClose }) => {
 // Controller — 弹窗 → 角色选择 → Session
 // ============================================================
 
+// 520 弹窗内嵌的 API 配置面板 —— 配完直接传送进活动，不再绕去设置 App
+const Like520InlineApiSetup: React.FC<{ onDone: () => void; onBack: () => void }> = ({ onDone, onBack }) => {
+    const { apiConfig, updateApiConfig, addToast, availableModels, setAvailableModels } = useOS();
+
+    const [localUrl, setLocalUrl] = useState(apiConfig.baseUrl);
+    const [localKey, setLocalKey] = useState(apiConfig.apiKey);
+    const [localModel, setLocalModel] = useState(apiConfig.model);
+    const [isLoadingModels, setIsLoadingModels] = useState(false);
+    const [statusMsg, setStatusMsg] = useState('');
+    const [showModelList, setShowModelList] = useState(false);
+
+    const handleSave = () => {
+        updateApiConfig({ baseUrl: localUrl, apiKey: localKey, model: localModel });
+        setStatusMsg('配置已保存');
+        addToast('API 配置已保存', 'success');
+        setTimeout(() => setStatusMsg(''), 2000);
+    };
+
+    const fetchModels = async () => {
+        if (!localUrl) { setStatusMsg('请先填写 URL'); return; }
+        setIsLoadingModels(true);
+        setStatusMsg('正在连接...');
+        try {
+            const baseUrl = localUrl.replace(/\/+$/, '');
+            const response = await fetch(`${baseUrl}/models`, {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${localKey}`, 'Content-Type': 'application/json' }
+            });
+            if (!response.ok) throw new Error(`Status ${response.status}`);
+            const data = await safeResponseJson(response);
+            const list = data.data || data.models || [];
+            if (Array.isArray(list)) {
+                const models = list.map((m: any) => m.id || m);
+                setAvailableModels(models);
+                if (models.length > 0 && !models.includes(localModel)) setLocalModel(models[0]);
+                setStatusMsg(`获取到 ${models.length} 个模型`);
+                setShowModelList(true);
+            } else { setStatusMsg('格式不兼容'); }
+        } catch {
+            setStatusMsg('连接失败');
+        } finally {
+            setIsLoadingModels(false);
+        }
+    };
+
+    const handleContinue = () => {
+        updateApiConfig({ baseUrl: localUrl, apiKey: localKey, model: localModel });
+        onDone();
+    };
+
+    return (
+        <div className="fixed inset-0 z-[9998] flex items-center justify-center p-5 animate-fade-in">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-md" />
+            <div className="relative w-full max-w-sm bg-white/95 backdrop-blur-xl rounded-[2.5rem] shadow-2xl border border-pink-200/50 overflow-hidden animate-slide-up max-h-[85vh] flex flex-col">
+                <div className="px-6 pt-6 pb-2 text-center shrink-0">
+                    <div className="text-2xl mb-1">🔧</div>
+                    <h3 className="text-lg font-bold text-slate-800">API 配置</h3>
+                    <p className="text-[11px] text-slate-400 mt-1">配置完成后即可前往今天的特别活动</p>
+                </div>
+
+                <div className="px-6 py-4 space-y-4 overflow-y-auto no-scrollbar flex-1">
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">URL</label>
+                        <input type="text" value={localUrl} onChange={(e) => setLocalUrl(e.target.value)} placeholder="https://..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                    </div>
+                    <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block pl-1">Key</label>
+                        <input type="password" value={localKey} onChange={(e) => setLocalKey(e.target.value)} placeholder="sk-..." className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+                    </div>
+                    <div>
+                        <div className="flex justify-between items-center mb-1.5 pl-1">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Model</label>
+                            <button onClick={fetchModels} disabled={isLoadingModels} className="text-[10px] text-pink-500 font-bold">{isLoadingModels ? 'Fetching...' : '刷新模型列表'}</button>
+                        </div>
+                        <input type="text" value={localModel} onChange={(e) => setLocalModel(e.target.value)} placeholder="gpt-4o-mini" className="w-full bg-white/50 border border-slate-200/60 rounded-xl px-4 py-2.5 text-sm font-mono focus:bg-white transition-all" />
+
+                        {showModelList && availableModels.length > 0 && (
+                            <div className="mt-2 max-h-32 overflow-y-auto no-scrollbar bg-slate-50 rounded-xl border border-slate-200/60 p-1">
+                                {availableModels.map(m => (
+                                    <button key={m} onClick={() => { setLocalModel(m); setShowModelList(false); }} className={`w-full text-left px-3 py-2 rounded-lg text-xs font-mono ${m === localModel ? 'bg-pink-500/10 text-pink-500 font-bold' : 'text-slate-600 hover:bg-slate-100'}`}>
+                                        {m}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    <button onClick={handleSave} className="w-full py-3 rounded-2xl font-bold text-white shadow-lg shadow-pink-200 bg-gradient-to-r from-[#FFB6C8] to-[#F18AAA] active:scale-95 transition-all">
+                        {statusMsg || '保存配置'}
+                    </button>
+                </div>
+
+                <div className="px-6 pb-6 pt-2 flex gap-3 shrink-0">
+                    <button onClick={onBack} className="flex-1 py-3 bg-slate-100 text-slate-500 font-bold rounded-2xl active:scale-95 transition-transform text-sm">
+                        返回
+                    </button>
+                    <button onClick={handleContinue} className="flex-1 py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white font-bold rounded-2xl shadow-lg shadow-pink-200 active:scale-95 transition-transform text-sm">
+                        前往活动 ♥
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 interface Like520ControllerProps {
     onClose: () => void;
     initialCharId?: string;
-    /** 由 PhoneShell 注入：跳到设置 → API 配置 */
-    onCheckApi?: () => void;
 }
 
-export const Like520Controller: React.FC<Like520ControllerProps> = ({ onClose, initialCharId, onCheckApi }) => {
+export const Like520Controller: React.FC<Like520ControllerProps> = ({ onClose, initialCharId }) => {
     const { characters } = useOS();
-    const [stage, setStage] = useState<'popup' | 'select' | 'session'>(initialCharId ? 'session' : 'popup');
+    const [stage, setStage] = useState<'popup' | 'api' | 'select' | 'session'>(initialCharId ? 'session' : 'popup');
     const [charId, setCharId] = useState<string>(initialCharId || '');
     const [defaultCharId, setDefaultCharId] = useState<string>('');
+
+    // 一次性弹窗：用户在弹窗里点过任何按钮都标记 dismissed，下次刷新就不会再弹
+    const markDismissed = () => {
+        try { localStorage.setItem(LIKE520_DISMISSED_KEY, '1'); } catch { /* ignore */ }
+    };
 
     // popup 一打开就预选一个角色：优先 Sully，没有 Sully 选聊得最频繁的那个
     useEffect(() => {
@@ -3465,14 +3574,20 @@ export const Like520Controller: React.FC<Like520ControllerProps> = ({ onClose, i
     const isSullyDefault = defaultChar ? (defaultChar.name || '').toLowerCase().includes('sully') : false;
 
     const dismiss = () => {
-        try { localStorage.setItem(LIKE520_DISMISSED_KEY, '1'); } catch { /* ignore */ }
+        markDismissed();
         onClose();
     };
 
     const enterWithDefault = () => {
         if (!defaultCharId) return;
+        markDismissed();
         setCharId(defaultCharId);
         setStage('session');
+    };
+
+    const goToApi = () => {
+        markDismissed();
+        setStage('api');
     };
 
     if (stage === 'popup') {
@@ -3499,9 +3614,11 @@ export const Like520Controller: React.FC<Like520ControllerProps> = ({ onClose, i
                         <h2 className="text-lg font-extrabold text-slate-800">{popupHeading}</h2>
                         <p className="text-[11px] text-pink-400 mt-1.5 font-medium">2026 May 20 Special</p>
                         <p className="text-[12px] text-slate-500 mt-3 leading-relaxed whitespace-pre-line">{popupBody}</p>
-                        {!isSullyDefault && defaultChar && (
-                            <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">（想换个 ta？桌面「特别时光」里所有 ta 都在）</p>
-                        )}
+                        <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">
+                            {defaultChar && !isSullyDefault
+                                ? '（想换个 ta？桌面「特别时光」里所有 ta 都在）'
+                                : '（这条提醒只会出现一次，活动随时可以在桌面「特别时光」里找到）'}
+                        </p>
                     </div>
 
                     <div className="px-6 pb-7 pt-2 space-y-3 relative">
@@ -3514,14 +3631,12 @@ export const Like520Controller: React.FC<Like520ControllerProps> = ({ onClose, i
                             <span>♥</span>
                         </button>
 
-                        {onCheckApi && (
-                            <button
-                                onClick={onCheckApi}
-                                className="w-full py-3 bg-pink-50 text-pink-500 font-semibold rounded-2xl text-sm active:scale-95 transition-transform"
-                            >
-                                API 配置
-                            </button>
-                        )}
+                        <button
+                            onClick={goToApi}
+                            className="w-full py-3 bg-pink-50 text-pink-500 font-semibold rounded-2xl text-sm active:scale-95 transition-transform"
+                        >
+                            API 配置
+                        </button>
 
                         <button
                             onClick={dismiss}
@@ -3532,6 +3647,23 @@ export const Like520Controller: React.FC<Like520ControllerProps> = ({ onClose, i
                     </div>
                 </div>
             </div>
+        );
+    }
+
+    if (stage === 'api') {
+        return (
+            <Like520InlineApiSetup
+                onDone={() => {
+                    // 配完直接进入活动 —— 优先用预选角色，没有就让用户挑
+                    if (defaultCharId) {
+                        setCharId(defaultCharId);
+                        setStage('session');
+                    } else {
+                        setStage('select');
+                    }
+                }}
+                onBack={() => setStage('popup')}
+            />
         );
     }
 
