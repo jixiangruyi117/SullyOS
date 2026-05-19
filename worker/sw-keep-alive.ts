@@ -15,8 +15,11 @@ import { installReiSW } from '@rei-standard/amsg-sw';
  *  - 1.4.0: Phase 2 Round 1 — ActiveMsg IDB v1→v2 (加 outbound_sessions /
  *           pending_tool_calls / reasoning_buffer 三个 store), 上线后老 SW 不升级
  *           会因为 VersionError 丢推送, 必须 bump 触发字节比较 + 重装。
+ *  - 1.5.0: Phase 2 Round 2 — push handler 按 messageKind 分轨
+ *           (content / reasoning / tool_request / error), 处理 _blob envelope,
+ *           tool_request 按 visibility 决定 postMessage 或 showNotification。
  */
-const SW_VERSION = '1.4.0';
+const SW_VERSION = '1.5.0';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
@@ -189,7 +192,9 @@ function openInboxDb(): Promise<IDBDatabase> {
   });
 }
 
-async function saveIncomingActiveMessage(payload: any) {
+// ─── content / inbox (kind=content 老路径, tool_request 的 prefix 也走这里) ───
+
+async function saveContentToInbox(payload: any) {
   const charId = payload?.metadata?.charId;
   const charName = payload?.contactName || payload?.metadata?.charName || '主动消息';
   const body = String(payload?.message || payload?.body || '').trim();
@@ -213,7 +218,14 @@ async function saveIncomingActiveMessage(payload: any) {
       messageType: payload?.messageType,
       messageSubtype: payload?.messageSubtype,
       taskId: payload?.taskId ?? null,
-      metadata: payload?.metadata || {},
+      // sessionId / messageIndex 放到 metadata 里, 主线程 flushInboxToChat 反查 reasoning_buffer
+      // + 标记是第几条 (第 1 条才挂 metadata.thinkingChain).
+      metadata: {
+        ...(payload?.metadata || {}),
+        sessionId: payload?.sessionId,
+        messageIndex: payload?.messageIndex,
+        totalMessages: payload?.totalMessages,
+      },
       sentAt,
       receivedAt: Date.now(),
     });
@@ -229,6 +241,153 @@ async function saveIncomingActiveMessage(payload: any) {
     avatarUrl: payload?.avatarUrl,
     sentAt,
   });
+}
+
+// ─── reasoning_buffer (kind=reasoning, 主线程 claim) ─────────────────────────
+
+async function saveReasoningToBuffer(payload: any) {
+  const sessionId: string | undefined = payload?.sessionId;
+  const charId: string | undefined = payload?.metadata?.charId;
+  const reasoningContent: string = String(payload?.reasoningContent ?? '');
+  if (!sessionId || !charId || !reasoningContent) return;
+
+  const db = await openInboxDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ACTIVE_MSG_REASONING_BUFFER_STORE, 'readwrite');
+    tx.objectStore(ACTIVE_MSG_REASONING_BUFFER_STORE).put({
+      sessionId,
+      charId,
+      reasoningContent,
+      receivedAt: Date.now(),
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  // reasoning push 不通知客户端 — 主线程在处理同 sessionId 的 content 时会主动 claim.
+}
+
+// ─── pending_tool_calls (kind=tool_request, 主线程 runner 跑) ────────────────
+
+async function savePendingToolCall(payload: any) {
+  const sessionId: string | undefined = payload?.sessionId;
+  const charId: string | undefined = payload?.metadata?.charId;
+  const toolCalls = Array.isArray(payload?.toolCalls) ? payload.toolCalls : [];
+  if (!sessionId || !charId || toolCalls.length === 0) return;
+
+  // iteration 来自 worker hook metadata.iteration (Round 2 worker 一定带), 兜底 0 防老 worker.
+  // 客户端 /continue 时取它 + 1; 多轮 tool 链路里 iteration 单调递增, worker 也按它做 fail-fast 400.
+  const iteration = Number.isFinite(payload?.metadata?.iteration) ? Number(payload.metadata.iteration) : 0;
+
+  const db = await openInboxDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE, 'readwrite');
+    tx.objectStore(ACTIVE_MSG_PENDING_TOOL_CALLS_STORE).put({
+      sessionId,
+      charId,
+      toolCalls,
+      llmOutputText: String(payload?.message || ''),
+      iteration,
+      createdAt: Date.now(),
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function notifyVisibleClientForToolRequest(payload: any) {
+  // 找一个 visible window: 在线 visible → postMessage 让 main 立即跑 runner.
+  // 否则展示通知, 让用户点开应用; 启动时 ActiveMsgRuntime.init 会消费 pending_tool_calls.
+  const clients = await sw.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const visibleClient = clients.find((c) => (c as WindowClient).visibilityState === 'visible');
+
+  if (visibleClient) {
+    visibleClient.postMessage({
+      type: 'instant-tool-request',
+      sessionId: payload?.sessionId,
+      charId: payload?.metadata?.charId,
+    });
+    return;
+  }
+
+  const charName = payload?.contactName || payload?.metadata?.charName || '主动消息';
+  const preview = String(payload?.message || '').slice(0, 40);
+  try {
+    await sw.registration.showNotification(charName, {
+      body: preview ? `${preview}…  (点开继续)` : '我想查点东西，点开继续',
+      icon: payload?.avatarUrl || './icons/icon-192.png',
+      badge: './icons/icon-192.png',
+      data: { payload, kind: 'tool_request' },
+      tag: `instant-tool-${payload?.sessionId}`,
+    });
+  } catch (e) {
+    console.warn('[amsg] tool_request notification failed', e);
+  }
+}
+
+// ─── _blob envelope (fetch real body, recurse) ───────────────────────────────
+
+async function fetchBlobEnvelope(payload: any): Promise<any | null> {
+  const url = payload?.url;
+  if (typeof url !== 'string' || !url) return null;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn('[amsg] blob fetch returned', res.status, url);
+      return null;
+    }
+    return await res.json();
+  } catch (e) {
+    console.warn('[amsg] blob fetch failed', url, e);
+    return null;
+  }
+}
+
+// ─── 路由总入口 ──────────────────────────────────────────────────────────────
+
+async function saveIncomingActiveMessage(payload: any) {
+  // 1. blob envelope: 真正 body 在 BlobStore 里, fetch 出来后用 body 继续路由.
+  // 重投递的 dedup 由主线程处理 (consumePendingToolCalls / inbox 都是原子 claim).
+  if (payload?._blob === true) {
+    const real = await fetchBlobEnvelope(payload);
+    if (!real) return;
+    return saveIncomingActiveMessage(real);
+  }
+
+  // 2. 按 messageKind 分轨; 兜底: 老 worker (0.6.x) 推过来的没 messageKind 字段, 当 content 处理.
+  const messageKind: string = payload?.messageKind ?? 'content';
+
+  switch (messageKind) {
+    case 'content':
+      await saveContentToInbox(payload);
+      return;
+
+    case 'reasoning':
+      await saveReasoningToBuffer(payload);
+      return;
+
+    case 'tool_request':
+      await savePendingToolCall(payload);
+      // tool_request 也可能带 prefix (worker hook 把数据标签前的 narration 放进 message),
+      // 走 content 路径让前置 narration 立刻显示 + 触发 applyAssistantPostProcessing 走副作用.
+      if (payload?.message) await saveContentToInbox(payload);
+      await notifyVisibleClientForToolRequest(payload);
+      return;
+
+    case 'error':
+      // 诊断 push: 不写 inbox, 不弹通知, 仅 log + 通知任意 visible client 把 error 渲染到 toast.
+      console.error('[amsg] error push', payload?.code, payload?.message);
+      await notifyClients({
+        type: 'active-msg-error',
+        code: payload?.code,
+        message: payload?.message,
+        charId: payload?.metadata?.charId,
+      });
+      return;
+
+    default:
+      console.warn('[amsg] unknown messageKind, falling back to content', messageKind);
+      await saveContentToInbox(payload);
+  }
 }
 
 sw.addEventListener('push', (event: PushEvent) => {

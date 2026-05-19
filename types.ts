@@ -238,6 +238,13 @@ export interface InstantPushPendingToolCall {
   toolCalls: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
   /** Pre-tool-call LLM text output, used to prefix assistant-side content if needed. */
   llmOutputText: string;
+  /**
+   * Agentic-loop iteration that produced this tool_request (0-indexed at worker side, see
+   * amsg-instant SessionContext.iteration). Client POST /continue must use iteration + 1,
+   * worker rejects non-incrementing values with HTTP 400. Default 0 for safety when the
+   * push didn't carry metadata.iteration (e.g. legacy worker).
+   */
+  iteration: number;
   createdAt: number;
 }
 
