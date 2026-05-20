@@ -586,14 +586,16 @@ export const RealtimeContextManager = {
             }
         }
 
-        // 5. 行为指令（强调）
+        // 5. 行为指令（按已开启的能力裁剪，避免注入无关项 + 与新闻块去重）
         parts.push('');
         parts.push(`### 【如何使用这些信息】`);
-        parts.push(`1. 这些信息是真实的，你可以直接引用（比如"我看到今天热搜有xxx"）`);
-        parts.push(`2. 天气是真实的，可以主动关心用户（"外面在下雨，你带伞了吗？"）`);
-        parts.push(`3. 新闻是真实发生的事，是你的背景知识——对方放松闲聊、没话头时可以自然挑感兴趣的带出来活跃气氛；对方在认真聊别的事时就安静别提`);
-        parts.push(`4. 如果用户问你"你怎么知道的"，可以说你刚刷到的/刚看到的`);
-        parts.push(`5. 不要假装不知道这些信息，这是你真的能感知到的外部世界`);
+        const tips: string[] = [];
+        tips.push(`这些信息都是真实的，可以直接引用；如果对方问"你怎么知道的"，就说你刚刷到 / 刚看到的。`);
+        if (config.weatherEnabled) {
+            tips.push(`天气是真实的，可以自然地关心对方（"外面在下雨，带伞了吗？"）。`);
+        }
+        tips.push(`别假装不知道这些，这是你真能感知到的外部世界。`);
+        tips.forEach((t, i) => parts.push(`${i + 1}. ${t}`));
 
         const fullContext = parts.join('\n');
         console.log(`%c[hot_news] 实时感知整段注入 ${fullContext.length} 字（含时间/天气/热点/指令）`, 'color:#7c3aed');
