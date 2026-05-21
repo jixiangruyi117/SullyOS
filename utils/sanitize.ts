@@ -117,12 +117,26 @@ const replaceEmojiReverseTag = (t: string): string =>
 const replaceHtmlBlocks = (t: string): string =>
   t.replace(/\[html\][\s\S]*?\[\/html\]/gi, '[HTML 卡片]');
 
-/** `<翻译><原文>X</原文><译文>Y</译文></翻译>` → `X` (只保留原文剥光译文块) */
-const extractTranslationOriginal = (t: string): string =>
-  t.replace(
+/**
+ * 翻译块只保留原文.
+ *
+ * 两种格式都处理:
+ *  - 规范 (chatRequestPayload.ts prompt 教 LLM 用的): `<翻译><原文>X</原文><译文>Y</译文></翻译>` → `X`
+ *  - LLM 幻觉常见错误:                                  `<翻译>X</翻译><译文>Y</译文>`             → `X`
+ *
+ * 第二种 LLM 偶尔会写, 严格 regex 不命中就会让 banner 上漏出原始 `<翻译>` 标签字符.
+ * 处理顺序: 先吃规范形态, 再兜底吃 `<译文>` 整块 + 残留的 `<翻译>` / `<原文>` 标签.
+ */
+const extractTranslationOriginal = (t: string): string => {
+  let result = t.replace(
     /<翻译>\s*<原文>([\s\S]*?)<\/原文>\s*<译文>[\s\S]*?<\/译文>\s*<\/翻译>/g,
     '$1',
   );
+  // 兜底: 先剥光 <译文>...</译文> 整块 (LLM 直接 sibling tag 的形态), 再剥残留的开/闭合标签
+  result = result.replace(/<译文>[\s\S]*?<\/译文>/g, '');
+  result = result.replace(/<\/?(?:翻译|原文)>/g, '');
+  return result;
+};
 
 // ─── facade 高层 API ───────────────────────────────────────────────────────
 

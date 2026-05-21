@@ -87,9 +87,26 @@ describe('sanitizeForNotification', () => {
       .toBe('前 [HTML 卡片] 后');
   });
 
-  it('A12 <翻译> 保留原文剥译文', () => {
+  it('A12 <翻译> 保留原文剥译文 (规范格式 with <原文>)', () => {
     expect(sanitizeForNotification('<翻译><原文>Hi</原文><译文>嗨</译文></翻译>'))
       .toBe('Hi');
+  });
+
+  it('A12+ <翻译> LLM 幻觉错误格式 (无 <原文> 包裹) → 兜底剥 <译文> + 标签', () => {
+    // T7 实测踩到: LLM 输出 `<翻译>X</翻译><译文>Y</译文>` 而不是规范的
+    // `<翻译><原文>X</原文><译文>Y</译文></翻译>`. 必须兜底剥, 否则 banner 上
+    // 漏出原始标签字符. 译文整块吞, 残留 open/close tag 剥光, 留原文.
+    expect(sanitizeForNotification('<翻译>Hello</翻译><译文>你好</译文>'))
+      .toBe('Hello');
+    expect(sanitizeForNotification('<翻译>Check the notification.</翻译><译文>检查通知。</译文>'))
+      .toBe('Check the notification.');
+  });
+
+  it('A12++ 落单的 <译文> / <翻译> 标签也剥干净', () => {
+    expect(sanitizeForNotification('before <译文>only translated</译文> after'))
+      .toBe('before  after');
+    expect(sanitizeForNotification('orphan <翻译> open <原文> tags'))
+      .toBe('orphan  open  tags');
   });
 
   // ─── 顺序依赖 (interaction bugs) ─────────────────────────────────────────
