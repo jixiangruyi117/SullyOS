@@ -178,7 +178,7 @@ function chunkReasoningByUtf8Bytes(text, maxBytes) {
   return chunks;
 }
 
-// node_modules/.pnpm/@rei-standard+amsg-instant@0.8.0-next.4/node_modules/@rei-standard/amsg-instant/dist/adapters/cloudflare.mjs
+// node_modules/.pnpm/@rei-standard+amsg-instant@0.8.0-next.5/node_modules/@rei-standard/amsg-instant/dist/adapters/cloudflare.mjs
 function isValidUrl(s) {
   if (typeof s !== "string") return false;
   try {
@@ -217,6 +217,25 @@ function validateMessagesArray(messages) {
     }
     if (!VALID_MESSAGE_ROLES.has(m.role)) {
       return `messages[${i}].role \u5FC5\u987B\u662F system / user / assistant / tool \u4E4B\u4E00`;
+    }
+    const isAssistantToolCallCarrier = m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
+    if (isAssistantToolCallCarrier) {
+      for (let j = 0; j < m.tool_calls.length; j++) {
+        const tc = m.tool_calls[j];
+        if (!tc || typeof tc !== "object" || typeof tc.id !== "string" || !tc.function) {
+          return `messages[${i}].tool_calls[${j}] \u5F62\u72B6\u975E\u6CD5 (\u9700\u8981 { id, type:'function', function:{ name, arguments } })`;
+        }
+      }
+      continue;
+    }
+    if (m.role === "tool") {
+      if (typeof m.content !== "string" && !Array.isArray(m.content)) {
+        return `messages[${i}].content (tool) \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u6216\u6570\u7EC4`;
+      }
+      if (typeof m.tool_call_id !== "string" || !m.tool_call_id) {
+        return `messages[${i}].tool_call_id \u5FC5\u586B (tool \u6D88\u606F\u5FC5\u987B\u5173\u8054\u5230\u4E00\u6B21 tool_call)`;
+      }
+      continue;
     }
     if (typeof m.content === "string") {
       if (!m.content) {
@@ -1776,7 +1795,7 @@ function createCloudflareWorker(optionsBuilder) {
   };
 }
 
-// node_modules/.pnpm/@rei-standard+amsg-instant@0.8.0-next.4/node_modules/@rei-standard/amsg-instant/dist/blob/d1.mjs
+// node_modules/.pnpm/@rei-standard+amsg-instant@0.8.0-next.5/node_modules/@rei-standard/amsg-instant/dist/blob/d1.mjs
 function createD1BlobStore(db, opts = {}) {
   if (!db || typeof db.prepare !== "function") {
     throw new TypeError("createD1BlobStore: db must be a D1 Database binding");
@@ -2064,8 +2083,58 @@ var SIDE_EFFECT_TAGS = [
   {
     re: /\[\[XHS_SHARE:\s*(\d+)\]\]/g,
     toDirective: (m) => ({ type: "xhs_share", idx: Number(m[1]) })
+  },
+  // 写日记 — 长形态: [[DIARY_START: title|mood]]\n content \n[[DIARY_END]]
+  // 短形态: [[DIARY: title|content]] 或 [[DIARY: content]] (无 title)
+  // 行为跟 applyAssistantPostProcessing.ts:465-495 字节对齐:
+  //   - 长形态 header 含 `|` → title|mood 切, 不含 `|` → 整段 = title
+  //   - 短形态 raw 含 `|` → title|content 切, 不含 `|` → 整段 = content (title 留空, 客户端兜底)
+  // 多行 content 用 [\s\S]*? 跨行, 别用 `s` flag (worker 端 esbuild target 默认 ok 但避免冗余)
+  {
+    re: /\[\[DIARY_START:\s*(.+?)\]\]\n?([\s\S]*?)\[\[DIARY_END\]\]/g,
+    toDirective: (m) => parseDiaryLong(m, "notion_write_diary")
+  },
+  {
+    re: /\[\[DIARY:\s*([\s\S]+?)\]\]/g,
+    toDirective: (m) => parseDiaryShort(m, "notion_write_diary")
+  },
+  // 飞书写日记 — 同形态, FS_ 前缀
+  {
+    re: /\[\[FS_DIARY_START:\s*(.+?)\]\]\n?([\s\S]*?)\[\[FS_DIARY_END\]\]/g,
+    toDirective: (m) => parseDiaryLong(m, "feishu_write_diary")
+  },
+  {
+    re: /\[\[FS_DIARY:\s*([\s\S]+?)\]\]/g,
+    toDirective: (m) => parseDiaryShort(m, "feishu_write_diary")
   }
 ];
+function parseDiaryLong(m, type) {
+  const header = m[1].trim();
+  const content = (m[2] || "").trim();
+  let title = "";
+  let mood = "";
+  if (header.includes("|")) {
+    const parts = header.split("|");
+    title = parts[0].trim();
+    mood = parts.slice(1).join("|").trim();
+  } else {
+    title = header;
+  }
+  return { type, title, content, mood: mood || void 0 };
+}
+function parseDiaryShort(m, type) {
+  const raw = m[1].trim();
+  let title = "";
+  let content = "";
+  if (raw.includes("|")) {
+    const parts = raw.split("|");
+    title = parts[0].trim();
+    content = parts.slice(1).join("|").trim();
+  } else {
+    content = raw;
+  }
+  return { type, title, content };
+}
 function classifyLLMOutput(text) {
   const toolCalls = [];
   for (const spec of DATA_TAGS) {
@@ -2183,7 +2252,18 @@ function buildPushDecision(input, deps) {
   }
   const segments = sanitizeIntoSegments(result.cleanedText);
   if (segments.length === 0) {
-    return { decision: "skip-push" };
+    if (result.directives.length === 0) {
+      return { decision: "skip-push" };
+    }
+    const directiveOnlyPush = buildDirectiveOnlyPush({
+      baseCommon,
+      callerMetadata,
+      iteration,
+      sessionId,
+      directives: result.directives
+    });
+    warnIfPayloadLarge(directiveOnlyPush, deps?.onSizeWarn);
+    return { decision: "finish", pushPayloads: [directiveOnlyPush] };
   }
   const lastIdx = segments.length - 1;
   const pushPayloads = segments.map(
@@ -2201,6 +2281,19 @@ function buildPushDecision(input, deps) {
   );
   pushPayloads.forEach((p) => warnIfPayloadLarge(p, deps?.onSizeWarn));
   return { decision: "finish", pushPayloads };
+}
+function buildDirectiveOnlyPush(args) {
+  const { baseCommon, callerMetadata, iteration, sessionId, directives } = args;
+  return buildContentPush({
+    ...baseCommon,
+    messageId: `msg_${sessionId}_${iteration}_directive`,
+    message: "",
+    metadata: {
+      ...callerMetadata,
+      iteration,
+      directives
+    }
+  });
 }
 function buildSegmentPush(args) {
   const { seg, baseCommon, notificationTitle, callerMetadata, iteration, chunkIdx, sessionId, directives } = args;

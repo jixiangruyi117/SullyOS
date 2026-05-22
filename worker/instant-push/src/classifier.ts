@@ -38,7 +38,11 @@ export type Directive =
   | { type: 'xhs_comment'; noteId: string; text: string }
   | { type: 'xhs_reply'; noteId: string; commentId: string; text: string }
   | { type: 'xhs_post'; title: string; content: string; tags: string }
-  | { type: 'xhs_share'; idx: number };
+  | { type: 'xhs_share'; idx: number }
+  // 写日记: 短形态 [[DIARY: title|content]] 或长形态 [[DIARY_START: title|mood]]\n content \n[[DIARY_END]],
+  // 飞书同形态 (FS_ 前缀). title 可空 → 客户端兜底用 `${char.name}的日记 - M/D`. mood 可空.
+  | { type: 'notion_write_diary'; title: string; content: string; mood?: string }
+  | { type: 'feishu_write_diary'; title: string; content: string; mood?: string };
 
 export type ClassificationResult =
   | {
@@ -209,7 +213,71 @@ const SIDE_EFFECT_TAGS: SideEffectSpec[] = [
     re: /\[\[XHS_SHARE:\s*(\d+)\]\]/g,
     toDirective: (m) => ({ type: 'xhs_share', idx: Number(m[1]) }),
   },
+  // 写日记 — 长形态: [[DIARY_START: title|mood]]\n content \n[[DIARY_END]]
+  // 短形态: [[DIARY: title|content]] 或 [[DIARY: content]] (无 title)
+  // 行为跟 applyAssistantPostProcessing.ts:465-495 字节对齐:
+  //   - 长形态 header 含 `|` → title|mood 切, 不含 `|` → 整段 = title
+  //   - 短形态 raw 含 `|` → title|content 切, 不含 `|` → 整段 = content (title 留空, 客户端兜底)
+  // 多行 content 用 [\s\S]*? 跨行, 别用 `s` flag (worker 端 esbuild target 默认 ok 但避免冗余)
+  {
+    re: /\[\[DIARY_START:\s*(.+?)\]\]\n?([\s\S]*?)\[\[DIARY_END\]\]/g,
+    toDirective: (m) => parseDiaryLong(m, 'notion_write_diary'),
+  },
+  {
+    re: /\[\[DIARY:\s*([\s\S]+?)\]\]/g,
+    toDirective: (m) => parseDiaryShort(m, 'notion_write_diary'),
+  },
+  // 飞书写日记 — 同形态, FS_ 前缀
+  {
+    re: /\[\[FS_DIARY_START:\s*(.+?)\]\]\n?([\s\S]*?)\[\[FS_DIARY_END\]\]/g,
+    toDirective: (m) => parseDiaryLong(m, 'feishu_write_diary'),
+  },
+  {
+    re: /\[\[FS_DIARY:\s*([\s\S]+?)\]\]/g,
+    toDirective: (m) => parseDiaryShort(m, 'feishu_write_diary'),
+  },
 ];
+
+type DiaryDirectiveType = 'notion_write_diary' | 'feishu_write_diary';
+
+/**
+ * 长日记 (DIARY_START..DIARY_END / FS_DIARY_START..FS_DIARY_END) → directive.
+ * m[1] = header (可能含 `|`), m[2] = body. 跟客户端 applyAssistantPostProcessing.ts:473-484 同切法.
+ */
+function parseDiaryLong(m: RegExpMatchArray, type: DiaryDirectiveType): Directive | null {
+  const header = m[1].trim();
+  const content = (m[2] || '').trim();
+  let title = '';
+  let mood = '';
+  if (header.includes('|')) {
+    const parts = header.split('|');
+    title = parts[0].trim();
+    mood = parts.slice(1).join('|').trim();
+  } else {
+    title = header;
+  }
+  // title 可空 — 客户端 applyAssistantPostProcessing.ts:498-501 会用 `${char.name}的日记 - M/D` 兜底,
+  // worker 端不知道角色名, 让客户端拼.
+  return { type, title, content, mood: mood || undefined } as Directive;
+}
+
+/**
+ * 短日记 ([[DIARY: ...]] / [[FS_DIARY: ...]]) → directive.
+ * m[1] = raw (可能含 `|`). 跟客户端 applyAssistantPostProcessing.ts:486-495 同切法.
+ */
+function parseDiaryShort(m: RegExpMatchArray, type: DiaryDirectiveType): Directive | null {
+  const raw = m[1].trim();
+  let title = '';
+  let content = '';
+  if (raw.includes('|')) {
+    const parts = raw.split('|');
+    title = parts[0].trim();
+    content = parts.slice(1).join('|').trim();
+  } else {
+    content = raw;
+  }
+  return { type, title, content } as Directive;
+}
 
 /**
  * 把 LLM 输出分类成一个 decision payload.

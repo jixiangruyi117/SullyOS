@@ -315,13 +315,39 @@ describe('buildPushDecision skip-push (空内容)', () => {
     expect(r.decision).toBe('skip-push');
   });
 
-  it('只有 INNER_STATE / 业务标签 → skip-push', () => {
+  it('只有 INNER_STATE → skip-push (无 directive 无内容)', () => {
+    const r = buildPushDecision(baseInput({
+      llmOutputText: '[[INNER_STATE: confused]]',
+    }));
+    // INNER_STATE 被剥, 无 directive 也无 segment → skip-push
+    expect(r.decision).toBe('skip-push');
+  });
+
+  it('只有副作用 directive 无 narration → finish + directive-only push', () => {
+    const r = buildPushDecision(baseInput({
+      llmOutputText: '[[ACTION:POKE]]',
+    }));
+    // 改: classifier 把 ACTION:POKE 提成 directive, cleanedText 空 → segments 空,
+    // 但 directives.length > 0, buildPushDecision 不再 skip-push, emit 一条
+    // directive-only push (message:'', 不带 notification, metadata.directives 携带).
+    expect(r.decision).toBe('finish');
+    const ps = (r as Extract<typeof r, { decision: 'finish' }>).pushPayloads;
+    expect(ps).toHaveLength(1);
+    const push = ps[0] as { message: string; metadata: { directives: unknown[] }; notification?: unknown };
+    expect(push.message).toBe('');
+    expect(push.metadata.directives).toEqual([{ type: 'poke' }]);
+    expect(push.notification).toBeUndefined();
+  });
+
+  it('INNER_STATE + 副作用 directive → finish + directive-only push', () => {
     const r = buildPushDecision(baseInput({
       llmOutputText: '[[INNER_STATE: confused]][[ACTION:POKE]]',
     }));
-    // ACTION:POKE 是 directive, classifier 把它从 cleanedText 剥光 → 空 segment
-    // → skip-push. directives 也丢了 — 这是 next.4 设计选择 (整段没用户可见内容
-    // 就不发任何东西, 副作用也不 replay).
-    expect(r.decision).toBe('skip-push');
+    // INNER_STATE 被剥 + ACTION:POKE 提成 directive → segments=[] + directives=[poke]
+    // → finish (directive-only). 跟上面 case 等价, 多 INNER_STATE 不影响.
+    expect(r.decision).toBe('finish');
+    const ps = (r as Extract<typeof r, { decision: 'finish' }>).pushPayloads;
+    expect(ps).toHaveLength(1);
+    expect((ps[0] as { metadata: { directives: unknown[] } }).metadata.directives).toEqual([{ type: 'poke' }]);
   });
 });

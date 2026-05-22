@@ -8,7 +8,7 @@ import { KeepAlive } from '../utils/keepAlive';
 import { ProactiveChat } from '../utils/proactiveChat';
 import { ContextBuilder } from '../utils/context';
 // 思考链 / HTML / MCD / memoryPalace 注入已下沉到 chatRequestPayload；这里不再直接调用
-import { useMusic } from '../context/MusicContext';
+import { useMusic, loadMusicHooks } from '../context/MusicContext';
 import { processNewMessages, mergePalaceFragmentsIntoMemories } from '../utils/memoryPalace/pipeline';
 import { incrementDigestRound, runCognitiveDigestion, detectPersonalityStyle } from '../utils/memoryPalace';
 // evolveFlowNarrative 保留为低频深刷新备用，日常意识流由副 API 的情绪评估同轮产出（innerState 字段）
@@ -27,6 +27,7 @@ import {
     type InstantPushPayload,
 } from '../utils/instantPushClient';
 import { applyAssistantPostProcessing, type XhsCaches } from '../utils/applyAssistantPostProcessing';
+import { ActiveMsgStore } from '../utils/activeMsgStore';
 
 // ─── 情绪评估（副API，fire & forget）───
 
@@ -474,6 +475,113 @@ export const useChatAI = ({
         setEvolvedNarrative('');
     }, [char?.id]);
 
+    // ─── Post-push emotion eval (Option B: online/offline split) ───────────────
+    //
+    // push 落库 (activeMsgRuntime) 后, 我们希望情绪 eval 跟 line 613 同样的 full ctx 跑 —
+    // 不再走 push-tail 的 degraded ctx. 两路触发:
+    //   1. 在线: activeMsgRuntime dispatch 'post-push-emotion-eval' 事件, 这里监听即时跑
+    //   2. 离线 / 切到别的 char: activeMsgRuntime 写 KV pending → useChatAI mount 切到这个
+    //      char 时 useEffect 兜底 drain
+    //
+    // 行为对齐 line 613: gate = isScheduleFeatureOn(char) && emotionConfig.enabled.
+    // ctx 重建用 buildChatRequestPayload 同一个 helper — push 那条 assistant msg 已经在
+    // DB 里 (activeMsgRuntime.flushInboxToChat 已 await saveMessage), DB.getRecentMessagesByCharId
+    // 拿到的 history 含它.
+    //
+    // 用 ref 包高频变化的依赖 (music / userProfile / 等), 不在 dep 数组里 → effect 只在 char.id 变时
+    // 重建 listener (切角色), 避免 music 每秒 tick 一次都 remove+addEventListener.
+    const emotionEvalDepsRef = useRef({
+        userProfile, groups, emojis, categories, realtimeConfig, apiConfig,
+        translationConfig, music, mcdMiniAppRef, evolvedNarrative,
+    });
+    emotionEvalDepsRef.current = {
+        userProfile, groups, emojis, categories, realtimeConfig, apiConfig,
+        translationConfig, music, mcdMiniAppRef, evolvedNarrative,
+    };
+
+    useEffect(() => {
+        if (!char?.id) return;
+        const charIdAtMount = char.id;
+
+        const runEvalForPushedChar = async (): Promise<void> => {
+            // 双 gate: 跟 line 613 一致 (schedule feature on + emotionConfig enabled).
+            // 关掉的话还是要 clear pending, 否则下次 mount 反复尝试.
+            if (!isScheduleFeatureOn(char) || !char.emotionConfig?.enabled) {
+                try { await ActiveMsgStore.clearPendingEmotionEval(charIdAtMount); } catch { /* ignore */ }
+                return;
+            }
+
+            const deps = emotionEvalDepsRef.current;
+            const emotionApi = (char.emotionConfig.api?.baseUrl)
+                ? char.emotionConfig.api
+                : { baseUrl: deps.apiConfig.baseUrl, apiKey: deps.apiConfig.apiKey, model: deps.apiConfig.model };
+
+            try {
+                // 重新从 DB 拉 history (push msg 此刻已经在 DB 里, activeMsgRuntime 在 dispatch
+                // 事件前已 await saveMessage). limit 200 跟 sendMessage line 543 同等级别.
+                const contextMsgs = await DB.getRecentMessagesByCharId(charIdAtMount, 200);
+
+                // 跟 sendMessage line 553 同一个 helper, 同一份 ctx → emotion eval 看到的 systemPrompt
+                // + cleanedApiMessages 跟 主 API 调用看到的几乎完全一致 (差别仅在 music live snapshot 时序).
+                const mcdMiniSnap = deps.mcdMiniAppRef?.current;
+                const mcdMiniOpen = !!mcdMiniSnap?.open;
+                const payload = await buildChatRequestPayload({
+                    char,
+                    userProfile: deps.userProfile,
+                    groups: deps.groups,
+                    emojis: deps.emojis,
+                    categories: deps.categories,
+                    historyMsgs: contextMsgs,
+                    contextLimit: 200,
+                    realtimeConfig: deps.realtimeConfig,
+                    innerState: deps.evolvedNarrative || undefined,
+                    musicSnapshot: {
+                        current: deps.music.current,
+                        playing: deps.music.playing,
+                        lyric: deps.music.lyric,
+                        activeLyricIdx: deps.music.activeLyricIdx,
+                        listeningTogetherWith: deps.music.listeningTogetherWith,
+                        cfg: deps.music.cfg,
+                    },
+                    translationConfig: deps.translationConfig,
+                    htmlMode: { enabled: !!(char as any).htmlModeEnabled, customPrompt: (char as any).htmlModeCustomPrompt },
+                    thinkingChain: { enabled: !!(char as any).showThinkingChain, customPrompt: (char as any).thinkingChainCustomPrompt },
+                    mcdMiniSnap: mcdMiniOpen ? mcdMiniSnap : undefined,
+                });
+
+                setEmotionStatus('evaluating');
+                const innerState = await evaluateEmotionBackground(
+                    char, deps.userProfile, payload.systemPrompt, payload.cleanedApiMessages, emotionApi,
+                );
+                if (innerState) setEvolvedNarrative(innerState);
+                // 成功后清 pending. 失败不清 → 下次 mount drain 重试.
+                try { await ActiveMsgStore.clearPendingEmotionEval(charIdAtMount); } catch { /* ignore */ }
+            } catch (e) {
+                console.warn('[post-push-emotion-eval] failed', e);
+                // 保留 pending 给下次 mount 重试
+            } finally {
+                setEmotionStatus('');
+            }
+        };
+
+        // 1. 在线路径: 监听 push 落库后 activeMsgRuntime 发的事件
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.charId !== charIdAtMount) return;
+            void runEvalForPushedChar();
+        };
+        window.addEventListener('post-push-emotion-eval', handler);
+
+        // 2. 离线路径兜底: mount 时检查这个 char 有没有 pending (用户离开 chat 期间累积的 push)
+        void ActiveMsgStore.getPendingEmotionEval(charIdAtMount).then((pending) => {
+            if (pending) void runEvalForPushedChar();
+        }).catch(() => { /* ignore */ });
+
+        return () => {
+            window.removeEventListener('post-push-emotion-eval', handler);
+        };
+    }, [char?.id]);
+
     // 跨消息持久化的 noteId→xsecToken 缓存，避免 lastXhsNotes 局部变量每次 triggerAI 都重置
     const xsecTokenCacheRef = useRef<Map<string, string>>(new Map());
     // noteId→title 缓存，用于 detail 失败时重新搜索拿新 token
@@ -876,93 +984,9 @@ export const useChatAI = ({
                     setDiaryStatus,
                     setXhsStatus,
                     updateTokenUsage,
-                    musicHooks: {
-                        getListeningSnapshot: () => {
-                            if (!music.current) return null;
-                            return {
-                                songId: music.current.id,
-                                name: music.current.name,
-                                artists: music.current.artists,
-                                album: music.current.album,
-                                albumPic: music.current.albumPic,
-                                duration: music.current.duration,
-                                fee: music.current.fee,
-                            };
-                        },
-                        joinListeningTogether: (cid: string) => {
-                            music.addListeningPartner(cid);
-                        },
-                        addSongToCharPlaylist: async (cid, song, target) => {
-                            try {
-                                const all = await DB.getAllCharacters();
-                                const targetChar = all.find(c => c.id === cid);
-                                if (!targetChar) return null;
-                                const profile = targetChar.musicProfile;
-                                if (!profile) return null;
-
-                                const now = Date.now();
-                                let playlists = profile.playlists.slice();
-                                let chosenIdx = -1;
-                                let created = false;
-
-                                if (target?.kind === 'new') {
-                                    // 新建歌单 — 标题去重（已存在同名就当成 existing 处理）
-                                    const dup = playlists.findIndex(p =>
-                                        p.title.trim().toLowerCase() === target.title.trim().toLowerCase());
-                                    if (dup >= 0) {
-                                        chosenIdx = dup;
-                                    } else {
-                                        playlists.push({
-                                            id: `pl-${now}-${playlists.length}`,
-                                            title: target.title.trim(),
-                                            description: (target.description || '').trim(),
-                                            coverStyle: `gradient-0${(playlists.length % 6) + 1}`,
-                                            songs: [],
-                                            createdAt: now,
-                                            updatedAt: now,
-                                        });
-                                        chosenIdx = playlists.length - 1;
-                                        created = true;
-                                    }
-                                } else if (target?.kind === 'existing') {
-                                    const t = target.title.trim().toLowerCase();
-                                    chosenIdx = playlists.findIndex(p => p.title.trim().toLowerCase() === t);
-                                    if (chosenIdx < 0) chosenIdx = playlists.findIndex(p =>
-                                        p.title.trim().toLowerCase().includes(t) || t.includes(p.title.trim().toLowerCase()));
-                                    if (chosenIdx < 0 && playlists.length > 0) chosenIdx = 0;
-                                } else {
-                                    if (playlists.length > 0) chosenIdx = 0;
-                                }
-
-                                if (chosenIdx < 0) {
-                                    playlists.push({
-                                        id: `pl-${now}-0`,
-                                        title: '我喜欢的音乐',
-                                        description: '',
-                                        coverStyle: 'gradient-01',
-                                        songs: [],
-                                        createdAt: now,
-                                        updatedAt: now,
-                                    });
-                                    chosenIdx = 0;
-                                    created = true;
-                                }
-
-                                const pl = playlists[chosenIdx];
-                                if (pl.songs.find(s => s.id === song.id)) {
-                                    return { playlistTitle: pl.title, created: false };
-                                }
-                                const updatedPl = { ...pl, songs: [...pl.songs, song], updatedAt: now };
-                                playlists[chosenIdx] = updatedPl;
-
-                                const updatedProfile = { ...profile, playlists, updatedAt: now };
-                                await DB.saveCharacter({ ...targetChar, musicProfile: updatedProfile });
-                                return { playlistTitle: pl.title, created };
-                            } catch {
-                                return null;
-                            }
-                        },
-                    },
+                    // 整组 musicHooks 由 MusicProvider 注册到模块级 slot, 本地 fetch 路径和
+                    // instant push 路径 (activeMsgRuntime) 共享同一份, 见 MusicContext.loadMusicHooks.
+                    musicHooks: loadMusicHooks() ?? undefined,
                 },
                 // Phase 0: 本地 fetch 路径保持原逻辑, 不跳 2nd-pass LLM, 也没有结构化 directives。
                 skipSecondPassLLM: false,

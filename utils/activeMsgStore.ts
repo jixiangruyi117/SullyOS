@@ -323,6 +323,40 @@ export const ActiveMsgStore = {
       tx.onabort = () => reject(tx.error || new Error('reasoning clear aborted'));
     });
   },
+
+  // ─── pending_emotion_evals (KV-backed) ────────────────────────────────────
+  // 当 push 落库后, useChatAI 没 mount 这个 char 时, 写一条 pending 记录占位; 用户切到
+  // 这个 chat 时 useChatAI useEffect drain. 在线 (已 mount) 时 dispatch 事件直接跑, 仍
+  // 写记录占位以防 listener 没成功跑 (例如 useChatAI 此刻还在 mount 中事件错过).
+  //
+  // Key: `pending_emotion_eval:${charId}` in STORE_KV. 一个 charId 一条记录: 多条 push 累积
+  // 时最新 push 覆盖, drain 时一次性 eval (eval 看最新 messages, 不需要 N 次).
+  // 用 KV 不开新 store: 单 charId 单记录 + 不需要复杂查询, KV 完全够用.
+
+  async setPendingEmotionEval(charId: string, lastPushMsgId: string): Promise<void> {
+    if (!charId) return;
+    await setKv(`pending_emotion_eval:${charId}`, {
+      charId,
+      lastPushMsgId,
+      addedAt: Date.now(),
+    });
+  },
+
+  async getPendingEmotionEval(charId: string): Promise<{ charId: string; lastPushMsgId: string; addedAt: number } | null> {
+    if (!charId) return null;
+    return getKv<{ charId: string; lastPushMsgId: string; addedAt: number }>(`pending_emotion_eval:${charId}`);
+  },
+
+  async clearPendingEmotionEval(charId: string): Promise<void> {
+    if (!charId) return;
+    const db = await openDB();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_KV, 'readwrite');
+      tx.objectStore(STORE_KV).delete(`pending_emotion_eval:${charId}`);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
 };
 
 export const maskActiveMsgUserId = (userId: string) => {

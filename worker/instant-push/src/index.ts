@@ -205,9 +205,25 @@ export function buildPushDecision(
   // finish
   const segments = sanitizeIntoSegments(result.cleanedText);
   if (segments.length === 0) {
-    // sanitize 全 strip 完没剩 (e.g. 整段只有 <think> 和业务标签). 没 banner / 没 bubble.
-    // directives 也无人挂载, 副作用就丢了 — 这是设计选择: 整段没用户可见内容就不发任何东西.
-    return { decision: 'skip-push' };
+    // 整段没用户可见正文 (e.g. LLM 只吐 [[DIARY_START]]...[[DIARY_END]] / [[XHS_POST: ...]] /
+    // [[ACTION:POKE]] 无 narration) 时:
+    //   - 没 directives → 真的无事可做, skip-push
+    //   - 有 directives → 发一条 directive-only push: message:'', 不带 notification (SW 不弹 banner),
+    //     directives 挂 metadata. 客户端 applyAssistantPostProcessing 看到 directives 非空照常 replay,
+    //     副作用 (写日记 / XHS_POST / POKE) 在重放中自己产 system message (e.g. `📔 X写了日记「…」`),
+    //     用户在 chat 里看得到反馈, 不需要再弹 banner.
+    if (result.directives.length === 0) {
+      return { decision: 'skip-push' };
+    }
+    const directiveOnlyPush = buildDirectiveOnlyPush({
+      baseCommon,
+      callerMetadata,
+      iteration,
+      sessionId,
+      directives: result.directives,
+    });
+    warnIfPayloadLarge(directiveOnlyPush, deps?.onSizeWarn);
+    return { decision: 'finish', pushPayloads: [directiveOnlyPush] };
   }
   const lastIdx = segments.length - 1;
   const pushPayloads = segments.map((seg, i) =>
@@ -225,6 +241,43 @@ export function buildPushDecision(
   );
   pushPayloads.forEach((p) => warnIfPayloadLarge(p, deps?.onSizeWarn));
   return { decision: 'finish', pushPayloads };
+}
+
+/**
+ * directive-only push — 当 LLM 输出整段全是副作用标签 (无 narration) 时用.
+ *
+ * 跟 buildSegmentPush 的区别:
+ *  - message: ''        (客户端 applyAssistantPostProcessing 看 rawAiContent='' + replayedTagPrefix
+ *                        重建副作用标签, 不会产生气泡: chunking 0 chunks → 0 bubble)
+ *  - 不带 notification  (SW 不弹 banner — 副作用 handler 自己产 system message 给用户看)
+ *  - chunkIdx 用 'directive' 占位字符串避免跟 segment 0 撞 messageId
+ *
+ * amsg-shared buildContentPush 允许 message:'', 只对 ReasoningPush 要求 non-empty (已查 next.5 schema).
+ */
+function buildDirectiveOnlyPush(args: {
+  baseCommon: {
+    messageType: typeof MESSAGE_TYPE.INSTANT;
+    source: typeof PUSH_SOURCE.INSTANT;
+    sessionId: string;
+    contactName: string;
+    avatarUrl: string | null;
+  };
+  callerMetadata: Record<string, unknown>;
+  iteration: number;
+  sessionId: string;
+  directives: unknown[];
+}): unknown {
+  const { baseCommon, callerMetadata, iteration, sessionId, directives } = args;
+  return buildContentPush({
+    ...baseCommon,
+    messageId: `msg_${sessionId}_${iteration}_directive`,
+    message: '',
+    metadata: {
+      ...callerMetadata,
+      iteration,
+      directives,
+    },
+  });
 }
 
 /**

@@ -416,6 +416,18 @@ export async function getOrCreateInstantSubscription(
 // 给点 margin 避免边界 case。
 const KEEPALIVE_MAX_BODY = 60 * 1024;
 
+/**
+ * 计算字符串的 UTF-8 字节长度. 浏览器 keepalive 64KiB 上限是按字节算的, 用
+ * `body.length` (UTF-16 code units) 会让中文 / emoji 这种多字节字符的实际请求
+ * 大小被低估 ~3x, 守卫放行后浏览器直接拒, fetch 抛 TypeError: Failed to fetch.
+ * 也给诊断面板的 bodyBytes / msgBytes 用同一份, 排错时显示的 KB 才跟实际一致.
+ */
+export function byteLengthOf(body: string): number {
+  // TextEncoder 在 Worker / iOS Safari 15.4+ / Chrome 38+ 全平台可用; SSR 中性,
+  // 该路径只跑在浏览器 fetch 之前.
+  return new TextEncoder().encode(body).length;
+}
+
 export interface SendInstantPushResult {
   ok: boolean;
   error?: string;
@@ -442,7 +454,8 @@ export async function sendInstantPush(
   // amsg-instant 0.8.0-next.4 起删了 splitPattern 字段, lib 不再做 split, hook
   // 自己返 pushPayloads 数组. caller 这边不用再兜底注入, payload 直接 stringify.
   const body = JSON.stringify(payload);
-  const useKeepalive = !!options.keepalive && body.length <= KEEPALIVE_MAX_BODY;
+  const bodyBytes = byteLengthOf(body);
+  const useKeepalive = !!options.keepalive && bodyBytes <= KEEPALIVE_MAX_BODY;
   const maskedHosts = [
     extractHost(cfg.workerUrl),
     extractHost(payload.apiUrl),
@@ -475,7 +488,7 @@ export async function sendInstantPush(
         http: {
           status: res.status,
           statusText: res.statusText || undefined,
-          bodyBytes: body.length,
+          bodyBytes,
           keepalive: useKeepalive,
           keepaliveLimit: KEEPALIVE_MAX_BODY,
           cfRay,
@@ -491,7 +504,7 @@ export async function sendInstantPush(
       http: {
         status: res.status,
         statusText: res.statusText || undefined,
-        bodyBytes: body.length,
+        bodyBytes,
         keepalive: useKeepalive,
         keepaliveLimit: KEEPALIVE_MAX_BODY,
         cfRay: res.headers.get('cf-ray') || undefined,
@@ -544,8 +557,10 @@ const DEFAULT_INSTANT_TIMEOUT_MS = 90_000;
 function buildContextDiag(business: InstantBusinessPayload): InstantDiagnostics['context'] {
   let msgBytes: number | undefined;
   try {
-    if (business.messages) msgBytes = JSON.stringify(business.messages).length;
-    else if (business.completePrompt) msgBytes = business.completePrompt.length;
+    // 同 sendInstantPush 里的 bodyBytes: 用 UTF-8 真实字节, 中文每字 3 字节, 才能
+    // 跟浏览器 64KiB keepalive 上限对上号; 旧版用 .length (UTF-16 单元) 中文会被低估.
+    if (business.messages) msgBytes = byteLengthOf(JSON.stringify(business.messages));
+    else if (business.completePrompt) msgBytes = byteLengthOf(business.completePrompt);
   } catch { /* ignore */ }
   return {
     char: business.contactName || undefined,

@@ -19,7 +19,8 @@
 import { ActiveMsgStore } from './activeMsgStore';
 import { DB } from './db';
 import { dispatchAgenticTool, type AgenticToolCtx } from './agenticTools';
-import { loadInstantConfig, isInstantConfigReady, getOrCreateInstantSubscription } from './instantPushClient';
+import { loadInstantConfig, isInstantConfigReady, getOrCreateInstantSubscription, byteLengthOf } from './instantPushClient';
+import { pushXhsCaches, pushLastXhsNotesRef } from './activeMsgRuntime';
 import type { APIConfig, RealtimeConfig, UserProfile, InstantPushPendingToolCall } from '../types';
 
 /** 跑一轮 ToolRequest → POST /continue. 失败时返回 false (上层决定要不要 toast). */
@@ -42,22 +43,18 @@ async function runOnePendingToolCall(item: InstantPushPendingToolCall): Promise<
   const realtimeConfig = loadRealtimeConfigFromLocalStorage();
 
   // tool runner 用的 ctx 跟 applyAssistantPostProcessing 本地 fetch 路径用的是同一个形状.
-  // xhsCaches 这里每次新建一个空 Map: 客户端 push 路径已经没法跨 round 共享 useRef 状态了
-  // (没 React tree), XHS detail retry / share-by-idx 这种依赖跨 tool token cache 的高阶用法
-  // Round 2 直接接受降级 — 大部分场景用不到.
-  const xhsCaches = {
-    xsecTokenCache: new Map<string, string>(),
-    noteTitleCache: new Map<string, string>(),
-    commentUserIdCache: new Map<string, string>(),
-    commentAuthorNameCache: new Map<string, string>(),
-    commentParentIdCache: new Map<string, string>(),
-  };
+  //
+  // xhsCaches / lastXhsNotesRef 直接复用 activeMsgRuntime 的模块级单例 — 不再每次新建空 Map.
+  // 这样 round 1 在这里 runXhsBrowse 填充的 notes + xsecToken 能被 round 2 (worker 发回 push
+  // 后 applyAssistantPostProcessing 处理 [[XHS_SHARE: 序号]] / [[XHS_COMMENT: ...]]) 读到.
+  //
+  // 生命周期 = 主进程打开期间. 刷页面 / 关浏览器清空, 跟本地 fetch 路径 useChatAI useRef 等价.
   const ctx: AgenticToolCtx = {
     char,
     userProfile,
     realtimeConfig,
-    xhsCaches,
-    lastXhsNotesRef: { current: [] },
+    xhsCaches: pushXhsCaches,
+    lastXhsNotesRef: pushLastXhsNotesRef,
     onProgress: (_channel, text) => {
       console.log('[instant-tool-runner:progress]', text);
     },
@@ -135,7 +132,10 @@ async function runOnePendingToolCall(item: InstantPushPendingToolCall): Promise<
   });
 
   try {
-    const res = await fetch(url, { method: 'POST', headers, body, keepalive: body.length <= 60 * 1024 });
+    // keepalive 64KiB 上限按 UTF-8 字节算, 用 body.length (UTF-16 单元) 会让带
+    // 中文 tool 结果 (小红书 / 飞书读日记) 的 /continue 在边界 case 误放行, 浏览器拒发,
+    // fetch 抛 TypeError: Failed to fetch. byteLengthOf 跟 instantPushClient 守卫同一份.
+    const res = await fetch(url, { method: 'POST', headers, body, keepalive: byteLengthOf(body) <= 60 * 1024 });
     const text = await res.text().catch(() => '');
     if (!res.ok) {
       console.error('[instant-tool-runner] /continue HTTP failed', res.status, text);

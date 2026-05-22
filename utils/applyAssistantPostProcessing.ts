@@ -125,7 +125,11 @@ export type PostProcessDirective =
     | { type: 'xhs_comment'; noteId: string; text: string }
     | { type: 'xhs_reply'; noteId: string; commentId: string; text: string }
     | { type: 'xhs_post'; title: string; content: string; tags: string }
-    | { type: 'xhs_share'; idx: number };
+    | { type: 'xhs_share'; idx: number }
+    // Notion / 飞书 写日记 — worker classifier 提取 title/content/mood, 我们拼回原 tag 给
+    // line 465 (Notion) / 649 (飞书) 既有 handler 跑. title 可空, 客户端兜底.
+    | { type: 'notion_write_diary'; title: string; content: string; mood?: string }
+    | { type: 'feishu_write_diary'; title: string; content: string; mood?: string };
 
 /**
  * 把结构化 directive 反向拼回原 tag 字符串. 拼回的目的是让下游 chatParser.parseAndExecuteActions
@@ -176,6 +180,19 @@ function reconstructDirectiveTags(directives: PostProcessDirective[] | undefined
             case 'xhs_share':
                 parts.push(`[[XHS_SHARE:${d.idx}]]`);
                 break;
+            case 'notion_write_diary': {
+                // 拼回长形态 [[DIARY_START: title|mood]]\n content \n[[DIARY_END]],
+                // 因为客户端 line 465 既支持长又支持短, 长形态信息更全 (能区分 mood).
+                // title 为空时给客户端空 header, 它内部 line 498-501 会用 char.name + 日期兜底.
+                const header = d.mood ? `${d.title}|${d.mood}` : d.title;
+                parts.push(`[[DIARY_START: ${header}]]\n${d.content}\n[[DIARY_END]]`);
+                break;
+            }
+            case 'feishu_write_diary': {
+                const header = d.mood ? `${d.title}|${d.mood}` : d.title;
+                parts.push(`[[FS_DIARY_START: ${header}]]\n${d.content}\n[[FS_DIARY_END]]`);
+                break;
+            }
             default:
                 console.warn('[directive-replay] unknown directive type, skipping', d);
         }
@@ -254,6 +271,17 @@ export interface PostProcessCtx {
     mcdInheritMeta?: any;
     /** XHS 跨消息缓存 (调用方持有的 ref) */
     xhsCaches: XhsCaches;
+    /**
+     * XHS 跨工具调用共享的"上一次 search/browse 结果". 给 [[XHS_SHARE: 序号]] 用.
+     *
+     * 本地 fetch 路径 caller 不传 — 函数内自动创建 fresh, 单次 send 内同 round runXhsBrowse/Search 填充
+     * 后立刻被同 round XHS_SHARE replay 读到 (跟历史行为字节级一致).
+     *
+     * Instant push 路径 caller (utils/activeMsgRuntime.ts) **必传** module-level 单例:
+     * runXhsBrowse 在 instantToolRunner round 1 填充 → /continue → worker round 2 LLM 输出 XHS_SHARE
+     * → push 落库 → applyAssistantPostProcessing replay 读同一份 ref. 跨 round 共享 = 跟本地路径同 UX.
+     */
+    lastXhsNotesRef?: { current: XhsNote[] };
     /** API 调用配置 */
     api: PostProcessApiCall;
     /** UI / 业务钩子 */
@@ -350,8 +378,12 @@ export async function applyAssistantPostProcessing(
         return xsecTokenCacheRef.get(noteId);
     };
 
-    /** XHS 跨 tool 共享笔记缓冲 — 取代旧版 `let lastXhsNotesRef.current`, 兼容 agenticTools.ts 的 ref 协议 */
-    const lastXhsNotesRef = { current: [] as XhsNote[] };
+    /**
+     * XHS 跨 tool 共享笔记缓冲 — 取代旧版 `let lastXhsNotesRef.current`.
+     * Caller (instant push 路径) 传了 module-level 单例就用它 (跨 round 共享让 XHS_SHARE 找到上轮笔记);
+     * 没传 (本地 fetch 路径) 自动创建 fresh (单次 send 内 runXhsBrowse → XHS_SHARE 同一函数闭包内共享, 跟历史一致).
+     */
+    const lastXhsNotesRef = ctx.lastXhsNotesRef ?? { current: [] as XhsNote[] };
 
     /** agenticTools 入参 ctx — 9 个 run* 函数共享 */
     const agenticCtx: AgenticToolCtx = {

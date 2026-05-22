@@ -98,4 +98,95 @@ describe('classifyLLMOutput', () => {
       expect(r.directives).toEqual([]);
     }
   });
+
+  // ─── 写日记 directive ─────────────────────────────────────────────────────
+
+  it('Notion 短日记 title|content → notion_write_diary directive', () => {
+    const r = classifyLLMOutput('好啊[[DIARY: 今天的事|窝在沙发吃西瓜]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.cleanedText).toBe('好啊');
+      expect(r.directives).toEqual([{
+        type: 'notion_write_diary',
+        title: '今天的事',
+        content: '窝在沙发吃西瓜',
+      }]);
+    }
+  });
+
+  it('Notion 短日记 无 title (无 |) → content 字段拿到整段', () => {
+    const r = classifyLLMOutput('[[DIARY: 只是普通的一段]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([{
+        type: 'notion_write_diary',
+        title: '',
+        content: '只是普通的一段',
+      }]);
+    }
+  });
+
+  it('Notion 长日记 [[DIARY_START: title|mood]]...[[DIARY_END]] → notion_write_diary + mood', () => {
+    const r = classifyLLMOutput('开始写[[DIARY_START: 雨天|惆怅]]\n下了一整天的雨，\n我看着窗外发呆。\n[[DIARY_END]]后记');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      // strip 后剥光长日记整段, 两侧文字直接相连 (跟客户端本地 fetch 路径行为一致, 见
+      // applyAssistantPostProcessing.ts:534 同模式 trim).
+      expect(r.cleanedText).toBe('开始写后记');
+      expect(r.directives).toEqual([{
+        type: 'notion_write_diary',
+        title: '雨天',
+        mood: '惆怅',
+        content: '下了一整天的雨，\n我看着窗外发呆。',
+      }]);
+    }
+  });
+
+  it('Notion 长日记 仅 title (无 |) → mood undefined', () => {
+    const r = classifyLLMOutput('[[DIARY_START: 标题]]\n内容\n[[DIARY_END]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      const d = r.directives[0] as { type: string; title: string; content: string; mood?: string };
+      expect(d.type).toBe('notion_write_diary');
+      expect(d.title).toBe('标题');
+      expect(d.mood).toBeUndefined();
+      expect(d.content).toBe('内容');
+    }
+  });
+
+  it('飞书短日记 [[FS_DIARY: ...]] → feishu_write_diary', () => {
+    const r = classifyLLMOutput('[[FS_DIARY: 飞书标题|飞书内容]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([{
+        type: 'feishu_write_diary',
+        title: '飞书标题',
+        content: '飞书内容',
+      }]);
+    }
+  });
+
+  it('飞书长日记 [[FS_DIARY_START..FS_DIARY_END]] → feishu_write_diary + mood', () => {
+    const r = classifyLLMOutput('[[FS_DIARY_START: 周末|轻松]]\n睡到自然醒\n[[FS_DIARY_END]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toEqual([{
+        type: 'feishu_write_diary',
+        title: '周末',
+        mood: '轻松',
+        content: '睡到自然醒',
+      }]);
+    }
+  });
+
+  it('Notion 长 + 飞书短同时存在 → 两个 directive 都收', () => {
+    const r = classifyLLMOutput('[[DIARY_START: a]]\nx\n[[DIARY_END]]\n[[FS_DIARY: b|y]]');
+    expect(r.kind).toBe('finish');
+    if (r.kind === 'finish') {
+      expect(r.directives).toHaveLength(2);
+      const types = r.directives.map(d => d.type);
+      expect(types).toContain('notion_write_diary');
+      expect(types).toContain('feishu_write_diary');
+    }
+  });
 });

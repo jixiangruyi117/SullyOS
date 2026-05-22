@@ -8,20 +8,33 @@ import {
 } from './applyAssistantPostProcessing';
 import { runPendingToolCalls } from './instantToolRunner';
 import { processNewMessages } from './memoryPalace/pipeline';
-import { evaluateEmotionBackground } from '../hooks/useChatAI';
+import { loadMusicHooks } from '../context/MusicContext';
+import type { XhsNote } from './realtimeContext';
 
 let initialized = false;
 
-// Phase 1: 用 module-level ref 缓存 XHS 跨消息 token (与 useChatAI 行为对齐)。
-// 跨整个 push 路径共享, 不每条 inbox 消息重建; XHS 在 push 路径默认被 skipSecondPassLLM
-// 跳过, 所以这里实际上始终是空 Map, 留着是为了满足 ctx 接口契约。
-const pushXhsCaches: XhsCaches = {
+// ─── push 路径模块级 XHS 共享状态 ─────────────────────────────────────────────
+//
+// 本地 fetch 路径 useChatAI 用 useRef 持有 5 个 cache Map + 单次调用闭包的 lastXhsNotesRef.
+// 生命周期 = useChatAI mount 期间 (刷页面 / 切角色 = 清). 跨多次 send / 跨工具调用都共享.
+//
+// Instant push 路径在 React 之外跑 (SW postMessage → activeMsgRuntime 监听器), 没 useRef.
+// 改成模块级单例: 跟本地路径"应用打开期间共享, 刷页面就清"行为字节级对齐.
+//
+// 跨 round 共享是关键: runXhsBrowse (round 1, 在 instantToolRunner) 填充 lastXhsNotesRef →
+// /continue → worker round 2 LLM 输出 [[XHS_SHARE: 序号]] → push 落库 → applyAssistantPostProcessing
+// 读同一份 ref. 上一轮笔记列表跨 SW 唤醒不丢 (只要主进程没刷新).
+//
+// 主进程刷新 / 浏览器关闭 → 清空, 跟本地路径 useChatAI 重 mount 清 useRef 等价.
+// 不写 IndexedDB — 行为与本地路径对齐, 不引入持久化代价.
+export const pushXhsCaches: XhsCaches = {
   xsecTokenCache: new Map(),
   noteTitleCache: new Map(),
   commentUserIdCache: new Map(),
   commentAuthorNameCache: new Map(),
   commentParentIdCache: new Map(),
 };
+export const pushLastXhsNotesRef: { current: XhsNote[] } = { current: [] };
 
 type MemoryPalaceGlobalConfig = {
   embedding: { baseUrl: string; apiKey: string; model: string; dimensions: number };
@@ -153,6 +166,7 @@ const processInboxMessageWithPostProcessing = async (message: ActiveMsg2InboxMes
       ...(message.metadata || {}),
     },
     xhsCaches: pushXhsCaches,
+    lastXhsNotesRef: pushLastXhsNotesRef,
     api: {
       baseUrl: apiConfig.baseUrl,
       headers: {
@@ -177,8 +191,12 @@ const processInboxMessageWithPostProcessing = async (message: ActiveMsg2InboxMes
       addToast: (msg: string, type: 'info' | 'success' | 'error') => {
         console.log('[push:toast]', type, msg);
       },
-      // 不传 musicHooks: ChatParser 检测到没钩子时会静默丢弃 MUSIC_ACTION 标签 (chatParser.ts:155)。
-      // Phase 1 接受 "push 来的消息看不到音乐卡片" 这个 trade-off, Phase 2 再补回来。
+      // musicHooks: 由 MusicProvider 注册到模块级 slot, 与 useChatAI 同一份, 见 MusicContext.loadMusicHooks.
+      // slot 未填充时 (理论上 MusicProvider 未 mount, 实际单页应用不会发生) 退化为 undefined,
+      // ChatParser 会静默丢弃 MUSIC_ACTION 标签 — 跟 Phase 1 老行为兜底一致, 不会引入新 failure mode.
+      // 注意 snapshot 时序: 这里读取的是 push 送达时的 current song, 而不是 AI 当时看到的那帧.
+      // 本地 fetch 路径也有相同窗口 (LLM 响应耗时内 current 可能漂移), 接受同一 trade-off.
+      musicHooks: loadMusicHooks() ?? undefined,
     },
     skipSecondPassLLM: true,
     // 把 worker hook 塞进 metadata.directives 的副作用结构化重放出来 (POKE/TRANSFER/ADD_EVENT/
@@ -192,12 +210,17 @@ const processInboxMessageWithPostProcessing = async (message: ActiveMsg2InboxMes
     reasoningContent,
   });
 
-  // ─── Phase 2 Round 2 (2f): Memory Palace + emotion eval 尾段 ───
-  // 这一段跟 useChatAI.ts:finally 字节级对齐 — push 路径走完 applyAssistantPostProcessing
-  // (落库 + chunks) 后, 把 Memory Palace 缓冲区 + 情绪评估也跑一遍, 否则 push 来的消息会被
-  // palace 永久漏掉 / buff 不更新. 非阻塞: 都用 .catch 包 (Memory Palace pipeline 自带并发锁,
-  // emotion eval 是 fire-and-forget). 失败只 log, 不抛.
-  await runPushTailPipeline(message, char, userProfile, contextMsgs);
+  // ─── Phase 2 Round 2 (2f): push 尾段 ───
+  // Memory Palace 缓冲区处理仍在这里 (跟本地 fetch 路径 finally 段对齐, 不依赖 React).
+  // 情绪评估**不再这里跑** — push-tail 用 char.systemPrompt + 50 条聊天的 degraded ctx,
+  // 会污染 useChatAI line 613 用 full ctx 算的 buff 状态. 改为 Option B:
+  //   - 写一条 pending 标记到 KV (charId → lastPushMsgId)
+  //   - dispatch 'post-push-emotion-eval' 事件
+  //   - useChatAI listener 接 (char.id 匹配时) → 用当前 React state 调 buildChatRequestPayload
+  //     重建 full ctx → evaluateEmotionBackground → setEvolvedNarrative + DB.saveCharacter
+  //   - useChatAI mount 时 useEffect 兜底 drain (应用关 / 切其他 char 期间 push 累积的)
+  // 见 hooks/useChatAI.ts 的 'post-push-emotion-eval' useEffect.
+  await runPushTailPipeline(message, char, userProfile);
 };
 
 /**
@@ -221,21 +244,18 @@ function extractDirectives(message: ActiveMsg2InboxMessage): PostProcessDirectiv
 }
 
 /**
- * 跑 push 路径的尾段: Memory Palace 缓冲区处理 + 情绪评估.
+ * 跑 push 路径的尾段: Memory Palace 缓冲区处理 + 情绪 eval pending 标记.
  *
- * 这两块在 useChatAI 里都依赖 React state/refs 注入 (charRef / setMemoryPalaceStatus /
- * setEvolvedNarrative / setEmotionStatus). 在 React 外面跑时降级:
- *   - charRef 检查 → 直接用 push 时拿到的 char (不存在"用户切角色"的并发, push 是被动消费)
- *   - setMemoryPalaceStatus → no-op (UI 没法显示这个状态, palace 自带并发锁仍能保证不重入)
- *   - setEvolvedNarrative → 写回 char.evolvedNarrative 经 DB.saveCharacter 持久化, 让下次 send
- *     时本地 fetch 路径读到 (跟 React 内 setEvolvedNarrative 后被 effect 写回 DB 等价)
- *   - autoArchive / 50 轮认知消化: 跟 React 内逻辑一样, 但这些已经在 pipeline.then 内部 self-contained
+ * Memory Palace 直接在这里跑 (pipeline 内部 self-contained, 不依赖 React state).
+ * 情绪评估走 Option B:
+ *   - 写 KV pending 标记 (charId → lastPushMsgId); 用户切回这个 chat 时 useChatAI useEffect drain
+ *   - 同时 dispatch 'post-push-emotion-eval' 事件; 如果 useChatAI 已 mount 这个 char 就立即跑
+ *   - 不管在线/离线, eval 最终用 useChatAI 内 buildChatRequestPayload 的 full ctx 跑 — 不再 degraded.
  */
 async function runPushTailPipeline(
   message: ActiveMsg2InboxMessage,
   char: import('../types').CharacterProfile,
   userProfile: UserProfile,
-  contextMsgs: import('../types').Message[],
 ): Promise<void> {
   // 1. Memory Palace
   const mpConfig = loadMemoryPalaceConfigFromLocalStorage();
@@ -267,45 +287,29 @@ async function runPushTailPipeline(
     }
   }
 
-  // 2. 情绪评估 (innerState 演化)
-  // useChatAI 那边的 gate: isScheduleFeatureOn(char) && char.emotionConfig?.enabled. push 路径只取
-  // emotionConfig.enabled — isScheduleFeatureOn 跟 char.scheduleStyle 强相关, 在 React 外面拉运行时
-  // ref 太啰嗦, 简化成"角色开了 emotionConfig 就跑"; 误差是 schedule off 但 emotionConfig on 的边缘配置
-  // 也会触发, 业务上无害.
+  // 2. 情绪评估 — Option B (online/offline split)
+  // 先写 KV pending 标记: 即使 useChatAI listener 因任何原因没接到事件 (mount race / 事件被吃),
+  // 下次 useChatAI mount 这个 char 时 useEffect 兜底 drain.
+  // gate 只看 emotionConfig.enabled — useChatAI 那边再叠 isScheduleFeatureOn 检查, 双 gate.
   const emotionConfig = (char as any).emotionConfig;
   if (emotionConfig?.enabled) {
-    const emotionApi = (emotionConfig.api?.baseUrl)
-      ? emotionConfig.api
-      : { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model };
-    // mainSystemPrompt + apiMessages: 我们没法重建 useChatAI 那一套精确的 systemPrompt (会包括 buff
-    // 注入 / 世界书 / persona / live context 等), push 路径用一个最小版替代: char.systemPrompt + 最近
-    // 50 条聊天作为 apiMessages, 让情绪 eval 看到的是"角色定义 + 近期对话". 评估精度比 fetch 路径低,
-    // 但能正确驱动 buff/innerState 演化方向. 后续可改成把 outbound_session.messages 喂进来.
-    const apiMessages = contextMsgs.slice(-50).map((m) => ({
-      role: m.role,
-      content: typeof m.content === 'string' ? m.content : '',
-    }));
-    const systemPrompt = char.systemPrompt || '';
     try {
-      const innerState = await evaluateEmotionBackground(char, userProfile, systemPrompt, apiMessages, emotionApi);
-      if (innerState) {
-        // 写回角色 evolvedNarrative — useChatAI 走 setEvolvedNarrative React state 后被 OSContext
-        // effect 同步到 DB 的, 这里直接 DB.saveCharacter 短路, 下次 send 时被读取注入 prompt.
-        try {
-          const latest = (await DB.getAllCharacters()).find((c) => c.id === char.id);
-          if (latest) {
-            await DB.saveCharacter({ ...latest, evolvedNarrative: innerState } as any);
-          }
-        } catch (e) {
-          console.warn('[push:emotion-eval] saveCharacter failed', e);
-        }
-      }
+      await ActiveMsgStore.setPendingEmotionEval(char.id, message.messageId);
     } catch (e) {
-      console.warn('[push:emotion-eval] evaluateEmotionBackground failed', e);
+      console.warn('[push:emotion-eval] setPendingEmotionEval failed', e);
     }
+    // 然后 dispatch 事件让 useChatAI listener (如果当前正在这个 chat) 立即跑.
+    // 事件没人接 (用户在别的 app / 别的 char) → 走 useChatAI mount 时的 drain 兜底.
+    try {
+      window.dispatchEvent(new CustomEvent('post-push-emotion-eval', {
+        detail: { charId: char.id, messageId: message.messageId },
+      }));
+    } catch { /* SSR-safe, ignore */ }
   }
 
-  // 顺手通过 message 触发 'emotion-updated' (跟 useChatAI line 382 一致), 让 UI 重新读 char
+  // 顺手通过 message 触发 'emotion-updated' (跟 useChatAI line 382 一致), 让 UI 重新读 char.
+  // 注意: 这里的 emotion-updated 是给 ChatHeader 的 buff 显示信号, 不是情绪 eval 完成信号 —
+  // 真正的 eval 完成由 useChatAI 内 evaluateEmotionBackground 自己 dispatch 同名事件.
   try {
     window.dispatchEvent(new CustomEvent('emotion-updated', { detail: { charId: char.id } }));
   } catch { /* SSR-safe / not browser, ignore */ }
