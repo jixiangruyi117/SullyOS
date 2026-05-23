@@ -14,6 +14,7 @@
 
 import { createCloudflareWorker } from '@rei-standard/amsg-instant/adapters/cloudflare';
 import { createD1BlobStore } from '@rei-standard/amsg-instant/blob/d1';
+import { sendWebPush } from '@rei-standard/amsg-instant';
 import {
   buildContentPush,
   buildToolRequestPush,
@@ -80,11 +81,93 @@ const cfWorker = createCloudflareWorker((env: Env) => {
 });
 
 /**
+ * 副 API 情绪评估 (worker 端). 框架的 onLLMOutput hook 故意不暴露 apiKey、也不允许自己发 LLM/push
+ * (见 amsg-instant SessionContext 文档), 所以情绪评估的第二次 LLM 调用 + emotion_update 推送
+ * 在框架外、这层包装里做: 客户端把副 API 凭据 + 拼好的 eval prompt 放在请求体 emotionEval 字段,
+ * 主回复跑完后 (cfWorker.fetch 返回后) 用 ctx.waitUntil 跑 eval, 把原始结果作为 emotion_update
+ * push 推回. 客户端 SW 路由进 inbox, flush 时 applyEmotionEvalRaw 落 buff + 广播 innerState.
+ *
+ * 失败全吞 (情绪评估失败不该影响主回复); emotion_update 不带 notification, SW 静默入 inbox.
+ */
+async function runEmotionEval(body: any, env: Env): Promise<void> {
+  const ee = body?.emotionEval;
+  const sub = body?.pushSubscription;
+  if (!ee?.prompt || !ee?.api?.baseUrl || !ee?.api?.apiKey || !ee?.api?.model) return;
+  if (!sub || typeof sub.endpoint !== 'string') return;
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
+
+  const charId = (body?.metadata && typeof body.metadata === 'object') ? body.metadata.charId : '';
+  try {
+    const baseUrl = String(ee.api.baseUrl).replace(/\/+$/, '');
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ee.api.apiKey || 'sk-none'}`,
+      },
+      body: JSON.stringify({
+        model: ee.api.model,
+        messages: [{ role: 'user', content: String(ee.prompt) }],
+        temperature: 0.85,
+        stream: false,
+      }),
+    });
+    if (!res.ok) {
+      console.error('[emotion-eval] LLM call failed', res.status);
+      return;
+    }
+    const data: any = await res.json();
+    const raw = data?.choices?.[0]?.message?.content || '';
+    if (!raw) return;
+
+    const pushObj = {
+      messageKind: 'emotion_update',
+      messageType: MESSAGE_TYPE.INSTANT,
+      source: PUSH_SOURCE.INSTANT,
+      sessionId: body?.sessionId || '',
+      contactName: body?.contactName || '',
+      message: '',
+      messageId: `msg_${body?.sessionId || Date.now()}_emotion`,
+      timestamp: Date.now(),
+      metadata: { charId, emotionRaw: raw },
+    };
+
+    // ttl / fetch 在运行时可选 (JSDoc 标了默认值), 但 .d.ts 把它们当必填 → as any 绕过.
+    await sendWebPush({
+      subscription: sub,
+      payload: JSON.stringify(pushObj),
+      vapid: {
+        email: env.VAPID_EMAIL || 'mailto:noreply@example.com',
+        publicKey: env.VAPID_PUBLIC_KEY,
+        privateKey: env.VAPID_PRIVATE_KEY,
+      },
+    } as any);
+  } catch (e) {
+    console.error('[emotion-eval] failed', e);
+  }
+}
+
+/**
  * 双导出: fetch + scheduled. scheduled 只在 wrangler.toml 配 cron + DB binding 时
  * 被 CF 调度; 没绑 D1 时是 no-op, 不会跑.
+ *
+ * fetch 在框架处理之外包了一层: 先把请求体克隆出来 (拿 emotionEval / pushSubscription),
+ * 让框架跑完主回复 + 推送, 再在 waitUntil 里跑副 API 情绪评估 + 推 emotion_update.
  */
 export default {
-  fetch: cfWorker.fetch,
+  fetch: async (request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) => {
+    let body: any = null;
+    try {
+      body = await request.clone().json();
+    } catch {
+      body = null; // 非 JSON / 解析失败: 不影响主路径
+    }
+    const response = await (cfWorker as any).fetch(request, env, ctx);
+    if (body?.emotionEval && response && response.status >= 200 && response.status < 300) {
+      ctx.waitUntil(runEmotionEval(body, env));
+    }
+    return response;
+  },
   async scheduled(_event: unknown, env: Env) {
     if (!env.DB) return;
     try {

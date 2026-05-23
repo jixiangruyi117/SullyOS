@@ -8,6 +8,7 @@ import {
 } from './applyAssistantPostProcessing';
 import { runPendingToolCalls } from './instantToolRunner';
 import { drainPendingDiaries } from './pendingDiary';
+import { applyEmotionEvalRaw } from './emotionApply';
 import { processNewMessages } from './memoryPalace/pipeline';
 import { loadMusicHooks } from '../context/MusicContext';
 import type { XhsNote } from './realtimeContext';
@@ -288,28 +289,9 @@ async function runPushTailPipeline(
     }
   }
 
-  // 2. 情绪评估 — Option B (online/offline split)
-  // 先写 KV pending 标记: 即使 useChatAI listener 因任何原因没接到事件 (mount race / 事件被吃),
-  // 下次 useChatAI mount 这个 char 时 useEffect 兜底 drain.
-  // gate 只看 emotionConfig.enabled — useChatAI 那边再叠 isScheduleFeatureOn 检查, 双 gate.
-  // isLastChunk 守卫: amsg-instant 一个 user turn 会产 N 条 push, runPushTailPipeline 每条都跑.
-  // 情绪 eval 用 full ctx 算且无并发锁, 不加守卫会被触发 N 次 (N 条 chunk → N 次 evaluateEmotionBackground),
-  // 跟 directives (line 209) 同理只该在最后一条 chunk 跑一次. 老 worker 无 index 字段 → isLastChunk 恒 true, 退化为每次一回 (即原行为).
-  const emotionConfig = (char as any).emotionConfig;
-  if (emotionConfig?.enabled && isLastChunk(message)) {
-    try {
-      await ActiveMsgStore.setPendingEmotionEval(char.id, message.messageId);
-    } catch (e) {
-      console.warn('[push:emotion-eval] setPendingEmotionEval failed', e);
-    }
-    // 然后 dispatch 事件让 useChatAI listener (如果当前正在这个 chat) 立即跑.
-    // 事件没人接 (用户在别的 app / 别的 char) → 走 useChatAI mount 时的 drain 兜底.
-    try {
-      window.dispatchEvent(new CustomEvent('post-push-emotion-eval', {
-        detail: { charId: char.id, messageId: message.messageId },
-      }));
-    } catch { /* SSR-safe, ignore */ }
-  }
+  // 2. 情绪评估 — 已迁到 worker (副 API): worker 跑完主回复后跑 eval, 推 emotion_update push,
+  // flushInboxToChat 看到 messageType==='emotion_update' 调 applyEmotionEvalRaw 落 buff.
+  // 所以这里不再触发客户端 eval (否则 worker + 客户端双跑双扣费). 见 worker/instant-push + useChatAI.
 
   // 顺手通过 message 触发 'emotion-updated' (跟 useChatAI line 382 一致), 让 UI 重新读 char.
   // 注意: 这里的 emotion-updated 是给 ChatHeader 的 buff 显示信号, 不是情绪 eval 完成信号 —
@@ -329,6 +311,29 @@ const flushInboxToChat = async () => {
   // 保证 toast / 未读 / 通知 / sendInstantPush resolver 语义不变。
   for (const message of pendingMessages) {
     const messageTimestamp = message.sentAt || message.receivedAt || Date.now();
+
+    // emotion_update: worker 跑完副 API 情绪评估后推回的 buff 结果. 不渲染成聊天消息, 直接落 buff +
+    // 广播 innerState (useChatAI 监听 'emotion-innerstate-updated' → setEvolvedNarrative 喂下一轮).
+    if (message.messageType === 'emotion_update') {
+      const emotionRaw = (message.metadata as any)?.emotionRaw;
+      if (emotionRaw) {
+        try {
+          const chars = await DB.getAllCharacters();
+          const ch = chars.find((c) => c.id === message.charId);
+          if (ch) {
+            const innerState = await applyEmotionEvalRaw(String(emotionRaw), ch);
+            if (innerState) {
+              window.dispatchEvent(new CustomEvent('emotion-innerstate-updated', {
+                detail: { charId: message.charId, innerState },
+              }));
+            }
+          }
+        } catch (e) {
+          console.warn('[flush:emotion_update] apply failed', e);
+        }
+      }
+      continue;
+    }
 
     // 白名单制: AI 文本类型基本封闭 (amsg-shared MESSAGE_TYPE 4 个 + SullyOS 3 个 legacy 别名);
     // 非 AI 类型 (forum / event / system / 未来扩展) 不可枚举, 不进 post-processing 防把它们当 AI 输出乱解析.

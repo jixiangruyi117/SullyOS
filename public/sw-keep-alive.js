@@ -302,7 +302,7 @@ async function removeQueuedRequest(id) {
 }
 
 // worker/sw-keep-alive.ts
-var SW_VERSION = "1.7.0";
+var SW_VERSION = "1.8.0";
 var PING_INTERVAL = 15e3;
 var MAX_MANUAL_ALIVE_MS = 5 * 6e4;
 var ACTIVE_MSG_DB_NAME = "ActiveMsg";
@@ -571,6 +571,29 @@ async function notifyVisibleClientForToolRequest(payload) {
     console.warn("[amsg] tool_request notification failed", e);
   }
 }
+async function saveEmotionUpdateToInbox(payload) {
+  const charId = payload?.metadata?.charId;
+  const emotionRaw = payload?.metadata?.emotionRaw;
+  if (!charId || !emotionRaw) return;
+  const messageId = String(payload?.messageId || `${charId}-emotion-${Date.now()}`);
+  const db = await openInboxDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(ACTIVE_MSG_INBOX_STORE, "readwrite");
+    tx.objectStore(ACTIVE_MSG_INBOX_STORE).put({
+      messageId,
+      charId,
+      charName: payload?.contactName || "",
+      body: "",
+      messageType: "emotion_update",
+      metadata: { charId, emotionRaw },
+      sentAt: Date.now(),
+      receivedAt: Date.now()
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+  await notifyClients({ type: "active-msg-received", charId, charName: payload?.contactName || "", body: "", emotionUpdate: true });
+}
 async function notifyClosedClientForContent(payload) {
   const preview = String(payload?.message || payload?.body || "").replace(/\s+/g, " ").trim();
   if (!preview) return;
@@ -620,6 +643,9 @@ async function saveIncomingActiveMessage(payload) {
       return;
     case "reasoning":
       await saveReasoningToBuffer(payload);
+      return;
+    case "emotion_update":
+      await saveEmotionUpdateToInbox(payload);
       return;
     case "tool_request":
       await savePendingToolCall(payload);

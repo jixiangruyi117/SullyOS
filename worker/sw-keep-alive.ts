@@ -32,8 +32,10 @@ import { installReiSW } from '@rei-standard/amsg-sw';
  *           之前只有 tool_request 弹通知, content (含写日记的 directive 回复) 关浏览器 /
  *           后台冻结时零通知 — 用户不知道要回前台, inbox 不 flush, 客户端副作用 (写 Notion)
  *           永远不跑. 与 tool_request 同策略: 有可见 client 交给 in-app UI, 否则系统通知.
+ *  - 1.8.0: 新增 emotion_update push 分轨 (saveEmotionUpdateToInbox). worker 端跑完副 API 情绪
+ *           评估后把 buff 结果推回, 静默写 inbox (不弹通知/不计未读), 客户端 flush 时落 buff.
  */
-const SW_VERSION = '1.7.0';
+const SW_VERSION = '1.8.0';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
@@ -391,6 +393,37 @@ async function notifyVisibleClientForToolRequest(payload: any) {
   }
 }
 
+// emotion_update push: worker 跑完副 API 情绪评估后推回的 buff 结果. 静默写进 inbox (不弹通知、
+// 不计未读), 客户端 flushInboxToChat 看到 messageType==='emotion_update' 时调 applyEmotionEvalRaw
+// 落 buff + 广播 innerState, 不渲染成聊天消息. notifyClients 仅用来触发一次 flush (前台时立即落 buff;
+// 后台时 postMessage 排队/丢弃, 回前台 visibilitychange flush 兜底).
+async function saveEmotionUpdateToInbox(payload: any) {
+  const charId = payload?.metadata?.charId;
+  const emotionRaw = payload?.metadata?.emotionRaw;
+  if (!charId || !emotionRaw) return;
+  const messageId = String(payload?.messageId || `${charId}-emotion-${Date.now()}`);
+
+  const db = await openInboxDb();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(ACTIVE_MSG_INBOX_STORE, 'readwrite');
+    tx.objectStore(ACTIVE_MSG_INBOX_STORE).put({
+      messageId,
+      charId,
+      charName: payload?.contactName || '',
+      body: '',
+      messageType: 'emotion_update',
+      metadata: { charId, emotionRaw },
+      sentAt: Date.now(),
+      receivedAt: Date.now(),
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+
+  // 触发客户端 flush (不带真实内容, 客户端 flush 时按 messageType 静默处理). 不 showNotification.
+  await notifyClients({ type: 'active-msg-received', charId, charName: payload?.contactName || '', body: '', emotionUpdate: true });
+}
+
 // content push: 没有可见 client 时 (后台 / PWA 被关 / 移动端冻结) 补一条系统通知, 否则用户
 // 无从得知回复已到, 不会回前台 → inbox 不 flush → 客户端副作用 (写 Notion / 飞书日记等
 // directive) 永远跑不了. 与 notifyVisibleClientForToolRequest 同策略: 有可见 client 就交给
@@ -465,6 +498,10 @@ async function saveIncomingActiveMessage(payload: any) {
 
     case 'reasoning':
       await saveReasoningToBuffer(payload);
+      return;
+
+    case 'emotion_update':
+      await saveEmotionUpdateToInbox(payload);
       return;
 
     case 'tool_request':

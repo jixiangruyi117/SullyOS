@@ -476,13 +476,26 @@ export const useChatAI = ({
         };
         window.addEventListener('post-push-emotion-eval', handler);
 
-        // 2. 离线路径兜底: mount 时检查这个 char 有没有 pending (用户离开 chat 期间累积的 push)
+        // 1b. instant 模式: 情绪评估在 worker 跑 (副 API), 结果走 emotion_update push → activeMsgRuntime
+        //     flush 时 applyEmotionEvalRaw 落 buff 并广播 innerState. 这里只把 innerState 喂回 evolvedNarrative
+        //     (下一轮 system prompt 用), buff 已在 activeMsgRuntime 落库.
+        const innerStateHandler = (e: Event) => {
+            const detail = (e as CustomEvent).detail;
+            if (detail?.charId !== charIdAtMount) return;
+            if (typeof detail?.innerState === 'string' && detail.innerState.trim()) {
+                setEvolvedNarrative(detail.innerState.trim());
+            }
+        };
+        window.addEventListener('emotion-innerstate-updated', innerStateHandler);
+
+        // 2. 离线路径兜底: mount 时检查这个 char 有没有 pending (老版本 / 非 worker-eval 路径残留的 push)
         void ActiveMsgStore.getPendingEmotionEval(charIdAtMount).then((pending) => {
             if (pending) void runEvalForPushedChar();
         }).catch(() => { /* ignore */ });
 
         return () => {
             window.removeEventListener('post-push-emotion-eval', handler);
+            window.removeEventListener('emotion-innerstate-updated', innerStateHandler);
         };
     }, [char?.id]);
 
@@ -618,14 +631,22 @@ export const useChatAI = ({
             // Save for dev debug viewer
             setLastSystemPrompt(systemPrompt);
 
-            // 3. Fire-and-forget emotion evaluation in parallel with main API call
-            //    直接复用已 build 好的 systemPrompt 和 cleanedApiMessages，确保情绪评估和主 API 看到的上下文完全一致
-            //    情绪评估同时产出 innerState（意识流独白），注入下一轮 system prompt
-            //    未单独配置情绪 API 时，回退到主 apiConfig（与记忆宫殿副 API 完全独立）
-            if (isScheduleFeatureOn(char) && char.emotionConfig?.enabled) {
-                const emotionApi = (char.emotionConfig.api?.baseUrl)
-                    ? char.emotionConfig.api
-                    : { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model };
+            // 3. 情绪评估 (副 API). 直接复用已 build 好的 systemPrompt 和 cleanedApiMessages，确保情绪
+            //    评估和主 API 看到的上下文完全一致；同时产出 innerState（意识流），注入下一轮 system prompt。
+            //    未单独配置情绪 API 时回退到主 apiConfig。
+            //    ── 路径分叉 ──
+            //    - 本地 fetch 模式: 客户端 fire-and-forget 跑 eval (前端活着).
+            //    - instant 模式: 不在客户端跑, 改把 eval prompt + 副 API 凭据塞进 instant 请求 (emotionEval 字段),
+            //      worker 跑完主回复后跑 eval 并推 emotion_update 回来, 客户端 flush 时落 buff —— 这样前端被杀也算数,
+            //      且不会跟客户端 eval 双跑双扣费. 见下方 instant 分支 + worker/instant-push + activeMsgRuntime.
+            const emotionEvalEnabled = !!(isScheduleFeatureOn(char) && char.emotionConfig?.enabled);
+            const instantOn = isInstantConfigReady();
+            const emotionApi = emotionEvalEnabled
+                ? ((char.emotionConfig!.api?.baseUrl)
+                    ? char.emotionConfig!.api!
+                    : { baseUrl: apiConfig.baseUrl, apiKey: apiConfig.apiKey, model: apiConfig.model })
+                : null;
+            if (emotionEvalEnabled && !instantOn && emotionApi) {
                 setEmotionStatus('evaluating');
                 evaluateEmotionBackground(char, userProfile, systemPrompt, cleanedApiMessages, emotionApi)
                     .then((innerState) => {
@@ -635,6 +656,12 @@ export const useChatAI = ({
                         setEmotionStatus('');
                     });
             }
+            const instantEmotionEval = (emotionEvalEnabled && instantOn && emotionApi)
+                ? {
+                    prompt: buildEmotionEvalPrompt(char, userProfile, systemPrompt, cleanedApiMessages),
+                    api: { baseUrl: emotionApi.baseUrl, apiKey: emotionApi.apiKey, model: emotionApi.model },
+                }
+                : undefined;
 
             // 发送前汇总计时
             const perfPreApi = Math.round(performance.now() - perfSendT0);
@@ -704,6 +731,9 @@ export const useChatAI = ({
                     // (SW 显示通知时回退到默认 app icon, 不影响推送成功率).
                     avatarUrl: /^https?:\/\//i.test(char.avatar || '') ? char.avatar : undefined,
                     metadata: { source: 'sullyos-chat', charId: char.id },
+                    // 副 API 情绪评估: worker 跑完主回复后用这套跑 eval, 推 emotion_update 回来 (见 worker 包装层).
+                    // 放顶层字段, 不进 metadata —— 框架不会回显它, 副 API apiKey 不会泄进 push.
+                    ...(instantEmotionEval ? { emotionEval: instantEmotionEval } : {}),
                 }, char.id, undefined, onInstantPosted);
                 if (!instantResult.ok) {
                     // 长报错 (worker 400 校验信息 + CF 错误页可能很长) 走弹窗, 手机用户能

@@ -1828,6 +1828,242 @@ function sanitizeTable(value) {
   return value;
 }
 
+// node_modules/.pnpm/@rei-standard+amsg-instant@0.8.0-next.5/node_modules/@rei-standard/amsg-instant/dist/index.mjs
+var TEXT_ENCODER2 = new TextEncoder();
+var TEXT_DECODER2 = new TextDecoder("utf-8", { fatal: false });
+function utf82(str) {
+  return TEXT_ENCODER2.encode(String(str));
+}
+function toUint82(buf) {
+  if (buf instanceof Uint8Array) return buf;
+  if (buf instanceof ArrayBuffer) return new Uint8Array(buf);
+  if (ArrayBuffer.isView(buf)) return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  throw new TypeError("Expected ArrayBuffer / Uint8Array");
+}
+function concatBytes2(...chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c instanceof Uint8Array ? c : new Uint8Array(c.buffer || c), offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+function bytesToBase64Url2(buf) {
+  const bytes = toUint82(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) {
+    bin += String.fromCharCode(bytes[i]);
+  }
+  const b64 = typeof btoa === "function" ? btoa(bin) : Buffer.from(bin, "binary").toString("base64");
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+function base64UrlToBytes2(input) {
+  const s = String(input).replace(/-/g, "+").replace(/_/g, "/");
+  const pad = (4 - s.length % 4) % 4;
+  const padded = s + "=".repeat(pad);
+  const bin = typeof atob === "function" ? atob(padded) : Buffer.from(padded, "base64").toString("binary");
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function jsonToBase64Url2(value) {
+  return bytesToBase64Url2(utf82(JSON.stringify(value)));
+}
+function randomBytes2(n) {
+  const out = new Uint8Array(n);
+  globalThis.crypto.getRandomValues(out);
+  return out;
+}
+var KEY_INFO_PREFIX2 = utf82("WebPush: info\0");
+var CEK_INFO2 = utf82("Content-Encoding: aes128gcm\0");
+var NONCE_INFO2 = utf82("Content-Encoding: nonce\0");
+var VAPID_DEFAULT_TTL2 = 60;
+var VAPID_TOKEN_LIFETIME2 = 12 * 3600;
+var RECORD_SIZE2 = 4096;
+async function sendWebPush2({ subscription, payload, vapid, ttl, fetch: fetchImpl }) {
+  if (!subscription || typeof subscription.endpoint !== "string") {
+    throw new Error("sendWebPush: invalid subscription");
+  }
+  if (typeof payload !== "string") {
+    throw new Error("sendWebPush: payload must be a string");
+  }
+  if (!vapid || !vapid.email || !vapid.publicKey || !vapid.privateKey) {
+    throw new Error("VAPID_CONFIG_MISSING");
+  }
+  const subscriptionKeys = subscription.keys || {};
+  if (typeof subscriptionKeys.p256dh !== "string" || typeof subscriptionKeys.auth !== "string") {
+    throw new Error("sendWebPush: subscription.keys.p256dh and .auth are required");
+  }
+  const encryptedBody = await encryptPushPayload2({
+    plaintext: utf82(payload),
+    uaPublicKey: base64UrlToBytes2(subscriptionKeys.p256dh),
+    authSecret: base64UrlToBytes2(subscriptionKeys.auth)
+  });
+  const jwt = await buildVapidJwt2({
+    audience: originOf2(subscription.endpoint),
+    subject: normalizeVapidSubject2(vapid.email),
+    publicKey: vapid.publicKey,
+    privateKey: vapid.privateKey
+  });
+  const fetchFn = fetchImpl || globalThis.fetch;
+  if (typeof fetchFn !== "function") {
+    throw new Error("sendWebPush: no fetch implementation available");
+  }
+  const res = await fetchFn(subscription.endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "Content-Encoding": "aes128gcm",
+      "TTL": String(Number.isFinite(ttl) ? ttl : VAPID_DEFAULT_TTL2),
+      "Authorization": `vapid t=${jwt}, k=${vapid.publicKey}`
+    },
+    body: encryptedBody
+  });
+  if (!res.ok) {
+    const text = await safeReadText2(res);
+    const err = new Error(
+      `Web Push delivery failed: ${res.status} ${res.statusText || ""}${text ? ` \u2014 ${text}` : ""}`
+    );
+    err.code = "PUSH_SEND_FAILED";
+    err.statusCode = res.status;
+    throw err;
+  }
+  return {
+    statusCode: res.status,
+    body: await safeReadText2(res),
+    headers: res.headers
+  };
+}
+async function encryptPushPayload2({ plaintext, uaPublicKey, authSecret }) {
+  const asKeyPair = await globalThis.crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    true,
+    ["deriveBits"]
+  );
+  const asPublicRaw = new Uint8Array(
+    await globalThis.crypto.subtle.exportKey("raw", asKeyPair.publicKey)
+  );
+  const uaPublicCryptoKey = await globalThis.crypto.subtle.importKey(
+    "raw",
+    uaPublicKey,
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    []
+  );
+  const ecdhSecret = new Uint8Array(
+    await globalThis.crypto.subtle.deriveBits(
+      { name: "ECDH", public: uaPublicCryptoKey },
+      asKeyPair.privateKey,
+      256
+    )
+  );
+  const keyInfo = concatBytes2(KEY_INFO_PREFIX2, uaPublicKey, asPublicRaw);
+  const ikm = await hkdfSha2562(authSecret, ecdhSecret, keyInfo, 32);
+  const salt = randomBytes2(16);
+  const cekBytes = await hkdfSha2562(salt, ikm, CEK_INFO2, 16);
+  const cek = await globalThis.crypto.subtle.importKey(
+    "raw",
+    cekBytes,
+    { name: "AES-GCM" },
+    false,
+    ["encrypt"]
+  );
+  const nonce = await hkdfSha2562(salt, ikm, NONCE_INFO2, 12);
+  const padded = concatBytes2(plaintext, new Uint8Array([2]));
+  const ciphertext = new Uint8Array(
+    await globalThis.crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, cek, padded)
+  );
+  const header = new Uint8Array(16 + 4 + 1 + asPublicRaw.byteLength);
+  header.set(salt, 0);
+  writeUint32BE2(header, 16, RECORD_SIZE2);
+  header[20] = asPublicRaw.byteLength;
+  header.set(asPublicRaw, 21);
+  return concatBytes2(header, ciphertext);
+}
+async function hkdfSha2562(salt, ikm, info, length) {
+  const baseKey = await globalThis.crypto.subtle.importKey(
+    "raw",
+    toUint82(ikm),
+    { name: "HKDF" },
+    false,
+    ["deriveBits"]
+  );
+  const bits = await globalThis.crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: toUint82(salt),
+      info: toUint82(info)
+    },
+    baseKey,
+    length * 8
+  );
+  return new Uint8Array(bits);
+}
+async function buildVapidJwt2({ audience, subject, publicKey, privateKey }) {
+  const header = jsonToBase64Url2({ typ: "JWT", alg: "ES256" });
+  const payload = jsonToBase64Url2({
+    aud: audience,
+    exp: Math.floor(Date.now() / 1e3) + VAPID_TOKEN_LIFETIME2,
+    sub: subject
+  });
+  const signingInput = utf82(`${header}.${payload}`);
+  const pubBytes = base64UrlToBytes2(publicKey);
+  const privBytes = base64UrlToBytes2(privateKey);
+  if (pubBytes.length !== 65 || pubBytes[0] !== 4) {
+    throw new Error("VAPID publicKey must be a 65-byte uncompressed P-256 point (base64url).");
+  }
+  if (privBytes.length !== 32) {
+    throw new Error("VAPID privateKey must be a 32-byte scalar (base64url).");
+  }
+  const jwk = {
+    kty: "EC",
+    crv: "P-256",
+    d: bytesToBase64Url2(privBytes),
+    x: bytesToBase64Url2(pubBytes.subarray(1, 33)),
+    y: bytesToBase64Url2(pubBytes.subarray(33, 65)),
+    ext: true
+  };
+  const key = await globalThis.crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await globalThis.crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    key,
+    signingInput
+  );
+  return `${header}.${payload}.${bytesToBase64Url2(sig)}`;
+}
+function normalizeVapidSubject2(email) {
+  const trimmed = String(email || "").trim();
+  if (!trimmed) return "";
+  return /^mailto:/i.test(trimmed) || /^https?:/i.test(trimmed) ? trimmed : `mailto:${trimmed}`;
+}
+function originOf2(endpoint) {
+  return new URL(endpoint).origin;
+}
+function writeUint32BE2(buf, offset, value) {
+  buf[offset] = value >>> 24 & 255;
+  buf[offset + 1] = value >>> 16 & 255;
+  buf[offset + 2] = value >>> 8 & 255;
+  buf[offset + 3] = value & 255;
+}
+async function safeReadText2(res) {
+  try {
+    return await res.text();
+  } catch {
+    return "";
+  }
+}
+var PUSH_PAYLOAD_BYTE_ENCODER2 = new TextEncoder();
+
 // utils/sanitize.ts
 var stripLiteralBackslashN = (t) => t.replace(/\\n/g, "\n");
 var stripSourceTags = (t) => t.replace(/\s*\[(?:聊天|通话|约会)\]\s*/g, "\n");
@@ -2197,8 +2433,73 @@ var cfWorker = createCloudflareWorker((env) => {
     }
   };
 });
+async function runEmotionEval(body, env) {
+  const ee = body?.emotionEval;
+  const sub = body?.pushSubscription;
+  if (!ee?.prompt || !ee?.api?.baseUrl || !ee?.api?.apiKey || !ee?.api?.model) return;
+  if (!sub || typeof sub.endpoint !== "string") return;
+  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
+  const charId = body?.metadata && typeof body.metadata === "object" ? body.metadata.charId : "";
+  try {
+    const baseUrl = String(ee.api.baseUrl).replace(/\/+$/, "");
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${ee.api.apiKey || "sk-none"}`
+      },
+      body: JSON.stringify({
+        model: ee.api.model,
+        messages: [{ role: "user", content: String(ee.prompt) }],
+        temperature: 0.85,
+        stream: false
+      })
+    });
+    if (!res.ok) {
+      console.error("[emotion-eval] LLM call failed", res.status);
+      return;
+    }
+    const data = await res.json();
+    const raw = data?.choices?.[0]?.message?.content || "";
+    if (!raw) return;
+    const pushObj = {
+      messageKind: "emotion_update",
+      messageType: MESSAGE_TYPE.INSTANT,
+      source: PUSH_SOURCE.INSTANT,
+      sessionId: body?.sessionId || "",
+      contactName: body?.contactName || "",
+      message: "",
+      messageId: `msg_${body?.sessionId || Date.now()}_emotion`,
+      timestamp: Date.now(),
+      metadata: { charId, emotionRaw: raw }
+    };
+    await sendWebPush2({
+      subscription: sub,
+      payload: JSON.stringify(pushObj),
+      vapid: {
+        email: env.VAPID_EMAIL || "mailto:noreply@example.com",
+        publicKey: env.VAPID_PUBLIC_KEY,
+        privateKey: env.VAPID_PRIVATE_KEY
+      }
+    });
+  } catch (e) {
+    console.error("[emotion-eval] failed", e);
+  }
+}
 var src_default = {
-  fetch: cfWorker.fetch,
+  fetch: async (request, env, ctx) => {
+    let body = null;
+    try {
+      body = await request.clone().json();
+    } catch {
+      body = null;
+    }
+    const response = await cfWorker.fetch(request, env, ctx);
+    if (body?.emotionEval && response && response.status >= 200 && response.status < 300) {
+      ctx.waitUntil(runEmotionEval(body, env));
+    }
+    return response;
+  },
   async scheduled(_event, env) {
     if (!env.DB) return;
     try {
