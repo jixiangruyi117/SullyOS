@@ -1345,7 +1345,7 @@ const XHSLite = (() => {
     let desc = content;
     const hashTags = [];
     for (const t of tags) { const name = String(t).replace(/^#/, ''); desc += ` #${name}[话题]#`; hashTags.push({ id: '', link: '', name, type: 'topic' }); }
-    const r = await signedPost(EDITH, '/web_api/sns/v2/note', buildImageNoteData(title, desc, isPrivate ? 2 : 1, fileInfos, hashTags), cookieStr, ck);
+    const r = await signedPost(EDITH, '/web_api/sns/v2/note', buildImageNoteData(title, desc, isPrivate ? 1 : 0, fileInfos, hashTags), cookieStr, ck);
     const noteId = r?.data?.id || r?.data?.note_id || r?.data?.note?.id || '';
     const ok = !!(r?.success && noteId);
     return {
