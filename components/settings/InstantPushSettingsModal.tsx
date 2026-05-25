@@ -111,7 +111,8 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
   const handleCopyWorkerCode = async () => {
     setCopyStatus('加载中…');
     try {
-      const res = await fetch('/instant-worker.bundle.js');
+      const base = import.meta.env.BASE_URL || '/';
+      const res = await fetch(`${base}instant-worker.bundle.js`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
       await navigator.clipboard.writeText(text);
