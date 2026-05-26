@@ -23,7 +23,7 @@ export const CHANGELOG_2026_04 = 'changelog-2026-04';
 export const CHANGELOG_2026_05 = 'changelog-2026-05';
 export const CHANGELOG_2026_05_10 = 'changelog-2026-05-10';
 export const CHANGELOG_2026_05_17 = 'changelog-2026-05-17';
-export const CHANGELOG_2026_05_25 = 'changelog-2026-05-25';
+export const CHANGELOG_2026_05_27 = 'changelog-2026-05-27';
 
 export const shouldShowUpdateNotification = (): boolean => {
     try {
@@ -43,7 +43,7 @@ export const UpdateNotificationPopup: React.FC<UpdateNotificationPopupProps> = (
     const handleView = () => {
         try {
             localStorage.setItem(UPDATE_NOTIFICATION_KEY_2026_05_25, Date.now().toString());
-            sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_25);
+            sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27);
         } catch { /* ignore */ }
         openApp(AppID.FAQ);
         onClose();
@@ -60,7 +60,7 @@ export const UpdateNotificationPopup: React.FC<UpdateNotificationPopupProps> = (
                         className="w-10 h-10 mx-auto mb-2"
                     />
                     <h2 className="text-lg font-extrabold text-slate-800">小更新提醒</h2>
-                    <p className="text-[11px] text-slate-400 mt-1">2026 年 5 月 25 日 · 情绪也能后台生成了</p>
+                    <p className="text-[11px] text-slate-400 mt-1">2026 年 5 月 27 日 · 情绪也能后台生成了</p>
                 </div>
 
                 <div className="px-6 pb-4 space-y-3">
@@ -87,7 +87,7 @@ export const UpdateNotificationPopup: React.FC<UpdateNotificationPopupProps> = (
                         onClick={handleView}
                         className="w-full py-3.5 bg-gradient-to-r from-rose-500 to-amber-500 text-white font-bold rounded-2xl shadow-lg shadow-rose-200 active:scale-95 transition-transform text-sm"
                     >
-                        查看 5 月 25 日小更新
+                        查看 5 月 27 日小更新
                     </button>
                 </div>
             </div>

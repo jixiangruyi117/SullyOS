@@ -14,7 +14,7 @@ import { isPushVapidReady } from '../../utils/pushVapid';
 import {
   markWorkerBuildSeen,
 } from '../WorkerUpdateReminderEvent';
-import { FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_25 } from '../UpdateNotificationEvent';
+import { FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27 } from '../UpdateNotificationEvent';
 import { InstantPushConfig, AppID } from '../../types';
 
 interface InstantPushSettingsModalProps {
@@ -131,7 +131,7 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
 
   const handleOpenTutorial = () => {
     try {
-      sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_25);
+      sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27);
     } catch { /* ignore */ }
     openApp(AppID.FAQ);
     onClose();

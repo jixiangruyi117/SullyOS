@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>2026 年 5 月 25 日小更新说明</title>
+<title>2026 年 5 月 27 日小更新说明</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,400&family=Noto+Serif+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -503,7 +503,7 @@
 <div class="wrap">
 
   <header class="page">
-    <div class="eyebrow">May 25, 2026 · Minor Update</div>
+    <div class="eyebrow">May 27, 2026 · Minor Update</div>
     <h1>
       情绪也搬上云了
       <span class="en">Send it, walk away — even the mood comes back on its own.</span>
@@ -524,7 +524,7 @@
       <li>开了 <strong>Instant 模式</strong>后，发完消息就能关网页走人，回复以<strong>推送通知</strong>回来。</li>
       <li>这次新增：角色的<strong>情绪 / 状态（情绪 buff）</strong>也在云端生成，不再占用前端等待。</li>
       <li>所以现在<strong>聊天回复</strong>和<strong>情绪 buff</strong> 两样都不用守在前端等了。</li>
-      <li><strong>上个版本配过 Instant Push 的，这次自动生效，不用重新配。</strong></li>
+      <li><strong>上个版本配过 Instant Push 的：这次动了后端 Worker 代码，需要手动同步一次 Worker 才能用上（VAPID 和开关沿用即可，不用重配）。</strong></li>
       <li>第一次用：先在<strong>设置 → Instant Push</strong> 配一次（下方附了配置视频），记得<strong>允许通知权限</strong>。</li>
     </ol>
   </div>
@@ -595,10 +595,13 @@
     <div class="note">
       <div class="label">已经配过上个版本的同学 · 重点</div>
       <p>
-        <strong>理论上这次会自动生效，你什么都不用做、也不用重新配。</strong>开关、VAPID 凭据、Worker 全都沿用之前那套，情绪 buff 走云端是这次自动带上的 —— 正常发消息用就行。
+        这次更新动到了<strong>后端 Worker 的代码</strong>。因为 Worker 跑在<strong>你自己的 Cloudflare 账户</strong>里、<strong>不会自动跟着我们更新</strong>，所以这次<strong>需要你手动同步一次</strong>才能用上新版（包括情绪 buff 走云端）。
       </p>
       <p style="margin-top: 10px;">
-        万一发现没生效（比如收不到推送了），再去 <span class="path">设置<span class="sep">›</span>Instant Push</span> 点一下<strong>测试推送</strong>验证一下；通常重新订阅一次就好。
+        同步很简单：到 <span class="path">设置<span class="sep">›</span>Instant Push</span>，按上面的视频/步骤把<strong>最新的 worker.bundle.js 重新粘贴部署一次</strong>即可。<strong>VAPID 凭据和开关都沿用之前那套，不用重新生成、也不用改前端配置。</strong>
+      </p>
+      <p style="margin-top: 10px;">
+        部署完回到 <span class="path">设置<span class="sep">›</span>Instant Push</span> 点一下<strong>测试推送</strong>，收到通知就说明新版生效了。
       </p>
     </div>
   </section>
@@ -634,13 +637,13 @@
   </section>
 
   <div class="finale">
-    <p class="big">5 月 25 日的小更新就这些</p>
+    <p class="big">5 月 27 日的小更新就这些</p>
     <p class="small">发完消息真的可以关掉网页走人了 —— 聊天和情绪都交给云端，回头看通知就好。</p>
   </div>
 
   <footer class="page">
     <div class="ornament">· · ·</div>
-    SullyOS Changelog · 2026.05.25
+    SullyOS Changelog · 2026.05.27
   </footer>
 
 </div>

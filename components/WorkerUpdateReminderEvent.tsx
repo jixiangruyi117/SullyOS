@@ -14,6 +14,7 @@ import React from 'react';
 import { useOS } from '../context/OSContext';
 import { AppID } from '../types';
 import { loadInstantConfig } from '../utils/instantPushClient';
+import { FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27 } from './UpdateNotificationEvent';
 
 // 每次更新 worker 代码就 bump 这个值 (用日期最直观)。
 export const WORKER_BUILD_VERSION = '2026-05-26';
@@ -56,6 +57,9 @@ export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps>
 
   const handleViewHelp = () => {
     markWorkerBuildSeen();
+    try {
+      sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27);
+    } catch { /* ignore */ }
     openApp(AppID.FAQ);
     onClose();
   };
