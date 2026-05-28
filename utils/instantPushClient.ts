@@ -320,6 +320,13 @@ export interface InstantWorkerCapabilityResult {
   raw?: unknown;
 }
 
+export interface InstantWorkerVersionResult {
+  ok: boolean;
+  error?: string;
+  /** Worker self-reported INSTANT_WORKER_VERSION (YYYY-MM-DD). */
+  version?: string;
+}
+
 // ── localStorage helpers ───────────────────────────────────────────────────
 
 const DEFAULT_CONFIG: InstantPushConfig = {
@@ -425,6 +432,71 @@ export async function probeInstantWorkerCapabilities(
     const err = e as { message?: string } | null;
     return { ok: false, error: err?.message ?? String(e) };
   }
+}
+
+export async function probeInstantWorkerVersion(
+  cfg: InstantPushConfig = loadInstantConfig(),
+): Promise<InstantWorkerVersionResult> {
+  const workerUrl = normalizeWorkerUrl(cfg.workerUrl || '');
+  if (!workerUrl.startsWith('https://')) {
+    return { ok: false, error: 'Worker URL 未配置或不是 https' };
+  }
+  try {
+    const res = await fetch(`${workerUrl}/version`, { method: 'GET' });
+    const { text, parsed } = await resolveSafeFetchText(res);
+    if (!res.ok) {
+      return { ok: false, error: parsed?.error?.message ?? `HTTP ${res.status}` };
+    }
+    const version = parsed?.data?.version;
+    if (typeof version !== 'string' || !version) {
+      // 旧版 worker 没有 /version 路由,Cloudflare 通常返 404 然后被前面 !res.ok 捕获;
+      // 这里兜底处理 200 但格式不对的情况 (理论上不会发生)。
+      return { ok: false, error: 'Worker 未返回版本号 (可能是旧版部署)', raw: text } as any;
+    }
+    return { ok: true, version };
+  } catch (e) {
+    const err = e as { message?: string } | null;
+    return { ok: false, error: err?.message ?? String(e) };
+  }
+}
+
+/**
+ * 复制最新版 worker bundle 到剪贴板。Settings 部署区和「Worker 有更新」弹窗
+ * 共用同一份逻辑, 避免两边 fetch 路径漂移。
+ *
+ * 抛出原始错误让调用方决定怎么显示 (toast / inline status / 不显示)。
+ */
+export async function copyInstantWorkerBundleToClipboard(): Promise<void> {
+  const base = import.meta.env.BASE_URL || '/';
+  const res = await fetch(`${base}instant-worker.bundle.js`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  await navigator.clipboard.writeText(text);
+}
+
+/**
+ * 根据用户填的 workerUrl 推算 Cloudflare dashboard 编辑界面的 deep link。
+ *
+ * Cloudflare 接受 `?to=/:account/...` 模式, 登录后会自动用当前账号 ID 替换 :account
+ * (多账号会出选择器)。这样我们不需要知道用户的 account ID, 只要从 workers.dev
+ * 子域名里抠出 worker name 就能直达 /production 编辑界面。
+ *
+ * 非 workers.dev 域名 (自定义域 / 反代) 没法可靠反推 worker name, 退回 worker 列表页,
+ * 用户自己点项目名进去 —— 这类用户清楚自己的部署结构, 不会被卡住。
+ */
+export function buildCloudflareDashboardUrl(workerUrl: string | undefined): string {
+  const FALLBACK = 'https://dash.cloudflare.com/?to=/:account/workers/overview';
+  if (!workerUrl) return FALLBACK;
+  try {
+    const u = new URL(workerUrl);
+    if (u.hostname.endsWith('.workers.dev')) {
+      const workerName = u.hostname.split('.')[0];
+      if (workerName) {
+        return `https://dash.cloudflare.com/?to=/:account/workers/services/view/${encodeURIComponent(workerName)}/production`;
+      }
+    }
+  } catch { /* invalid url → fallback */ }
+  return FALLBACK;
 }
 
 // ── Web Push subscription helpers ─────────────────────────────────────────

@@ -4,20 +4,23 @@
  *
  * 背景：用户的 worker 跑在自己的 Cloudflare 账户里，目前没法保证自动跟上游同步
  * (见 worker/instant-push/README.md 阶段 2 第 5 条存疑说明)。所以每次我们更新
- * worker 代码就 bump 下面的 WORKER_BUILD_VERSION，启用了 Instant Push 的用户会被
- * 提醒一次：去重新部署 / 同步一下 worker，确认后记下版本，不再反复弹。
+ * worker 代码就 bump utils/instantWorkerVersion.ts 里的 INSTANT_WORKER_VERSION,
+ * 启用了 Instant Push 的用户会被提醒一次：去重新部署 / 同步一下 worker。
  *
  * 只提醒启用了 Instant Push 的用户；没开的人完全不受打扰。
+ * 同一个版本号只弹一次 (sullyos_worker_build_seen 记 dismiss 过的版本)。
  */
 
-import React from 'react';
-import { useOS } from '../context/OSContext';
-import { AppID } from '../types';
-import { loadInstantConfig } from '../utils/instantPushClient';
-import { FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27 } from './UpdateNotificationEvent';
+import React, { useState } from 'react';
+import {
+  loadInstantConfig,
+  copyInstantWorkerBundleToClipboard,
+  buildCloudflareDashboardUrl,
+} from '../utils/instantPushClient';
+import { INSTANT_WORKER_VERSION } from '../utils/instantWorkerVersion';
 
-// 每次更新 worker 代码就 bump 这个值 (用日期最直观)。
-export const WORKER_BUILD_VERSION = '2026-05-26';
+// 兼容旧调用方: 仍然导出 WORKER_BUILD_VERSION, 内部指向单一来源常量。
+export const WORKER_BUILD_VERSION = INSTANT_WORKER_VERSION;
 
 // 记录用户「已确认过的 worker 版本号」。
 const WORKER_UPDATE_SEEN_KEY = 'sullyos_worker_build_seen';
@@ -28,7 +31,7 @@ const WORKER_UPDATE_SEEN_KEY = 'sullyos_worker_build_seen';
  */
 export const markWorkerBuildSeen = (): void => {
   try {
-    localStorage.setItem(WORKER_UPDATE_SEEN_KEY, WORKER_BUILD_VERSION);
+    localStorage.setItem(WORKER_UPDATE_SEEN_KEY, INSTANT_WORKER_VERSION);
   } catch { /* ignore */ }
 };
 
@@ -42,7 +45,7 @@ export const shouldShowWorkerUpdateReminder = (): boolean => {
     const cfg = loadInstantConfig();
     if (!cfg.enabled) return false;
     const seen = localStorage.getItem(WORKER_UPDATE_SEEN_KEY);
-    return seen !== WORKER_BUILD_VERSION;
+    return seen !== INSTANT_WORKER_VERSION;
   } catch {
     return false;
   }
@@ -53,21 +56,47 @@ interface WorkerUpdateReminderPopupProps {
 }
 
 export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps> = ({ onClose }) => {
-  const { openApp } = useOS();
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [copyError, setCopyError] = useState('');
 
-  const handleViewHelp = () => {
-    markWorkerBuildSeen();
+  const cfg = loadInstantConfig();
+  const dashboardUrl = buildCloudflareDashboardUrl(cfg.workerUrl);
+  // workers.dev 子域才能推出确切的 worker name; 自定义域 / 反代退化成 workers 列表页。
+  const dashboardLabel = dashboardUrl.includes('/services/view/')
+    ? '打开我的 Worker'
+    : '打开 Worker 列表';
+
+  const handleCopy = async () => {
+    setCopyStatus('loading');
     try {
-      sessionStorage.setItem(FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27);
-    } catch { /* ignore */ }
-    openApp(AppID.FAQ);
-    onClose();
+      await copyInstantWorkerBundleToClipboard();
+      setCopyStatus('done');
+      setTimeout(() => setCopyStatus((s) => (s === 'done' ? 'idle' : s)), 2500);
+    } catch (e) {
+      const err = e as { message?: string } | null;
+      setCopyError(err?.message ?? '未知错误');
+      setCopyStatus('error');
+    }
   };
 
-  const handleDismiss = () => {
+  const handleOpenWorker = () => {
+    // 不在这里 markWorkerBuildSeen —— 用户可能只是先打开 dashboard, 还没真粘贴部署。
+    // 等他再次回来发"对比已部署"时若一致, 那个流程会顺其自然不再触发提醒。
+    window.open(dashboardUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleLater = () => {
     markWorkerBuildSeen();
     onClose();
   };
+
+  const copyButtonLabel = copyStatus === 'loading'
+    ? '复制中…'
+    : copyStatus === 'done'
+      ? '✓ 已复制'
+      : copyStatus === 'error'
+        ? '重试复制'
+        : '复制最新代码';
 
   return (
     <div className="fixed inset-0 z-[9998] flex items-center justify-center p-5 animate-fade-in">
@@ -79,38 +108,53 @@ export const WorkerUpdateReminderPopup: React.FC<WorkerUpdateReminderPopupProps>
             alt="worker update"
             className="w-10 h-10 mx-auto mb-2"
           />
-          <h2 className="text-lg font-extrabold text-slate-800">Worker 有更新</h2>
-          <p className="text-[11px] text-slate-400 mt-1">Instant Push · 建议同步一下你的 Worker</p>
+          <h2 className="text-lg font-extrabold text-slate-800">Worker 后端有更新</h2>
+          <p className="text-[11px] text-slate-400 mt-1">最新版本 {INSTANT_WORKER_VERSION} · Instant Push</p>
         </div>
 
         <div className="px-6 pb-4 space-y-3">
-          <div className="bg-gradient-to-br from-indigo-50 to-sky-50 border border-indigo-100 rounded-2xl p-4">
+          <div className="bg-gradient-to-br from-indigo-50 to-sky-50 border border-indigo-100 rounded-2xl p-4 space-y-2">
             <p className="text-[13px] text-slate-700 leading-relaxed">
-              我们更新了 <strong className="text-indigo-600">Instant Push 的后端 Worker 代码</strong>。
-              由于 Worker 跑在<strong>你自己的 Cloudflare 账户</strong>里，
-              <strong className="text-rose-600">不会自动跟着我们更新</strong>，
-              需要你手动同步一次才能用上最新版本。
+              推送 worker 有新版本，需要你手动同步一下：
             </p>
-            <p className="text-[12px] text-slate-500 leading-relaxed mt-2">
-              不更新通常也能继续用，只是可能缺少新功能或修复。更新方式：到
-              <strong> worker 目录的 README</strong> 按「备用方案」重新粘贴一次
-              <strong> worker.bundle.js</strong>，或重新克隆部署。
+            <ol className="text-[12px] text-slate-600 leading-relaxed list-decimal pl-5 space-y-0.5">
+              <li>点下面「复制最新代码」</li>
+              <li>打开你的 Cloudflare worker 编辑界面</li>
+              <li>全选粘贴覆盖，点 Deploy</li>
+            </ol>
+            <p className="text-[11px] text-slate-500 leading-relaxed pt-1">
+              如果不方便现在处理，新代码也已经同步到「设置 → Instant 消息设置」里，
+              随时按提示操作即可。
             </p>
+            {copyStatus === 'error' && (
+              <p className="text-[11px] text-rose-500 leading-relaxed">复制失败：{copyError}</p>
+            )}
           </div>
         </div>
 
         <div className="px-6 pb-7 pt-2 space-y-2">
           <button
-            onClick={handleViewHelp}
-            className="w-full py-3.5 bg-gradient-to-r from-indigo-500 to-sky-500 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 active:scale-95 transition-transform text-sm"
+            onClick={() => void handleCopy()}
+            disabled={copyStatus === 'loading'}
+            className={`w-full py-3.5 font-bold rounded-2xl text-sm transition-transform active:scale-95 ${
+              copyStatus === 'done'
+                ? 'bg-emerald-500 text-white'
+                : 'bg-gradient-to-r from-indigo-500 to-sky-500 text-white shadow-lg shadow-indigo-200'
+            }`}
           >
-            去看怎么更新
+            {copyButtonLabel}
           </button>
           <button
-            onClick={handleDismiss}
+            onClick={handleOpenWorker}
+            className="w-full py-3 bg-white border border-slate-200 text-slate-700 font-bold rounded-2xl text-sm active:scale-95 transition-transform"
+          >
+            ↗ {dashboardLabel}
+          </button>
+          <button
+            onClick={handleLater}
             className="w-full py-2.5 text-slate-400 font-medium text-[12px]"
           >
-            知道了，先不更新
+            稍后处理
           </button>
         </div>
       </div>

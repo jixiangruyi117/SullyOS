@@ -2935,6 +2935,9 @@ function classifyLLMOutput(text) {
   return { kind: "finish", cleanedText, sanitizedBody, directives };
 }
 
+// utils/instantWorkerVersion.ts
+var INSTANT_WORKER_VERSION = "2026-05-28";
+
 // worker/instant-push/src/index.ts
 var MULTIPART_TRANSPORT = { enabled: true };
 var UTILITY_CORS_HEADERS = {
@@ -3112,6 +3115,21 @@ function verifyUtilityClientToken(request, env) {
   }
   return null;
 }
+function handleVersionRequest(request) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
+  }
+  if (request.method !== "GET") {
+    return utilityJson(405, {
+      success: false,
+      error: { code: "METHOD_NOT_ALLOWED", message: "Use GET" }
+    });
+  }
+  return utilityJson(200, {
+    success: true,
+    data: { version: INSTANT_WORKER_VERSION }
+  });
+}
 async function handleCapabilitiesRequest(request, env) {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
@@ -3233,6 +3251,9 @@ async function runEmotionEval(body, env, requestUrl) {
 var src_default = {
   fetch: async (request, env, ctx) => {
     const url = new URL(request.url);
+    if (url.pathname === "/version") {
+      return handleVersionRequest(request);
+    }
     if (url.pathname === "/capabilities" || url.pathname === "/health") {
       return handleCapabilitiesRequest(request, env);
     }

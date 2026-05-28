@@ -23,6 +23,7 @@ import {
 
 import { classifyLLMOutput } from './classifier';
 import { sanitizeIntoSegments, type Segment } from '../../../utils/sanitize';
+import { INSTANT_WORKER_VERSION } from '../../../utils/instantWorkerVersion';
 
 export interface Env {
   VAPID_PUBLIC_KEY: string;
@@ -266,6 +267,25 @@ function verifyUtilityClientToken(request: Request, env: Env): Response | null {
   return null;
 }
 
+// /version: 用户部署的 worker 自报版本日期。前端拿这个跟内置 INSTANT_WORKER_VERSION
+// 比对, 不一致就提示重新部署。不要求 client token (这只是个静态查询, 不暴露任何
+// secret), 也不接受 POST — 没有副作用就用 GET。
+function handleVersionRequest(request: Request): Response {
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
+  }
+  if (request.method !== 'GET') {
+    return utilityJson(405, {
+      success: false,
+      error: { code: 'METHOD_NOT_ALLOWED', message: 'Use GET' },
+    });
+  }
+  return utilityJson(200, {
+    success: true,
+    data: { version: INSTANT_WORKER_VERSION },
+  });
+}
+
 async function handleCapabilitiesRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: UTILITY_CORS_HEADERS });
@@ -429,6 +449,9 @@ async function runEmotionEval(body: any, env: Env, requestUrl?: string): Promise
 export default {
   fetch: async (request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }) => {
     const url = new URL(request.url);
+    if (url.pathname === '/version') {
+      return handleVersionRequest(request);
+    }
     if (url.pathname === '/capabilities' || url.pathname === '/health') {
       return handleCapabilitiesRequest(request, env);
     }

@@ -8,12 +8,16 @@ import {
   getOrCreateInstantSubscription,
   sendTestInstantPush,
   probeInstantWorkerCapabilities,
+  probeInstantWorkerVersion,
+  copyInstantWorkerBundleToClipboard,
+  buildCloudflareDashboardUrl,
   normalizeWorkerUrl,
 } from '../../utils/instantPushClient';
 import { isPushVapidReady } from '../../utils/pushVapid';
 import {
   markWorkerBuildSeen,
 } from '../WorkerUpdateReminderEvent';
+import { INSTANT_WORKER_VERSION } from '../../utils/instantWorkerVersion';
 import { FAQ_TARGET_SECTION_KEY, CHANGELOG_2026_05_27 } from '../UpdateNotificationEvent';
 import { InstantPushConfig, AppID } from '../../types';
 
@@ -48,6 +52,9 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
   const [capabilityStatusKind, setCapabilityStatusKind] = useState<'idle' | 'loading' | 'success' | 'warning' | 'error'>('idle');
   const [capabilityBusy, setCapabilityBusy] = useState(false);
   const [copyStatus, setCopyStatus] = useState('');
+  const [versionStatus, setVersionStatus] = useState('');
+  const [versionStatusKind, setVersionStatusKind] = useState<'idle' | 'loading' | 'success' | 'warning' | 'error'>('idle');
+  const [versionBusy, setVersionBusy] = useState(false);
 
   // GitHub 上 worker.bundle.js 的地址 — 主路径是 app 内「复制 Worker 代码」直接拷贝
   // 本地随包的 bundle; 这个 URL 仅作复制失败时的兜底入口. vite.config.ts 注入的
@@ -75,6 +82,8 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
     setCapabilityStatus('');
     setCapabilityStatusKind('idle');
     setCopyStatus('');
+    setVersionStatus('');
+    setVersionStatusKind('idle');
   }, [open]);
 
   const normalizedWorkerUrl = normalizeWorkerUrl(workerUrl);
@@ -115,17 +124,54 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
   const handleCopyWorkerCode = async () => {
     setCopyStatus('加载中…');
     try {
-      const base = import.meta.env.BASE_URL || '/';
-      const res = await fetch(`${base}instant-worker.bundle.js`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const text = await res.text();
-      await navigator.clipboard.writeText(text);
+      await copyInstantWorkerBundleToClipboard();
       setCopyStatus('已复制');
       setTimeout(() => setCopyStatus(''), 2000);
     } catch (e) {
       const err = e as { message?: string } | null;
       setCopyStatus('');
       addToast(`复制失败：${err?.message ?? '未知错误'}`, 'error');
+    }
+  };
+
+  const handleCheckDeployedVersion = async () => {
+    if (versionBusy) return;
+    if (!normalizedWorkerUrl) {
+      setVersionStatus('请先填 Worker URL');
+      setVersionStatusKind('warning');
+      return;
+    }
+    setVersionBusy(true);
+    setVersionStatus('正在查询已部署版本…');
+    setVersionStatusKind('loading');
+    try {
+      const result = await probeInstantWorkerVersion(currentCfg());
+      if (!result.ok) {
+        const errText = result.error || '未知错误';
+        // /version 是新增路由,老 bundle 没有,Cloudflare 通常返 404。提示用户这就是要重新部署的信号。
+        const looksLikeOldBundle = /404|not found/i.test(errText);
+        setVersionStatus(
+          looksLikeOldBundle
+            ? `你部署的 Worker 没有 /version 路由,通常意味着是旧版 bundle —— 重新部署即可解决`
+            : `查询失败：${errText}`
+        );
+        setVersionStatusKind(looksLikeOldBundle ? 'warning' : 'error');
+        return;
+      }
+      const deployed = result.version!;
+      if (deployed === INSTANT_WORKER_VERSION) {
+        setVersionStatus(`✓ 你部署的版本 (${deployed}) 已是最新`);
+        setVersionStatusKind('success');
+      } else {
+        setVersionStatus(`你部署的是 ${deployed},最新是 ${INSTANT_WORKER_VERSION} —— 建议重新部署`);
+        setVersionStatusKind('warning');
+      }
+    } catch (e) {
+      const err = e as { message?: string } | null;
+      setVersionStatus(`查询失败：${err?.message ?? String(e)}`);
+      setVersionStatusKind('error');
+    } finally {
+      setVersionBusy(false);
     }
   };
 
@@ -423,6 +469,27 @@ export const InstantPushSettingsModal: React.FC<InstantPushSettingsModalProps> =
             <code className="font-mono"> worker.bundle.js </code>全部内容粘贴覆盖，再 Deploy；
             VAPID 公钥/私钥到「推送凭据 (VAPID)」面板复制 env 清单，粘进 Worker 的 Variables。
           </p>
+
+          {/* Worker 代码版本 + 对比已部署 */}
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-white border border-slate-200 px-3 py-2">
+            <div className="min-w-0">
+              <p className="text-[11px] text-slate-500">当前 Worker 代码版本</p>
+              <p className="text-[12px] font-bold text-slate-700 font-mono">{INSTANT_WORKER_VERSION}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void handleCheckDeployedVersion()}
+              disabled={versionBusy || !normalizedWorkerUrl}
+              className={`shrink-0 px-3 py-2 text-[11px] rounded-xl font-bold ${versionBusy || !normalizedWorkerUrl ? 'bg-slate-100 text-slate-400' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+            >
+              {versionBusy ? '查询中…' : '对比已部署'}
+            </button>
+          </div>
+          {versionStatus && (
+            <p className={`text-[11px] leading-relaxed ${versionStatusKind === 'success' ? 'text-emerald-600' : versionStatusKind === 'warning' ? 'text-amber-600' : versionStatusKind === 'error' ? 'text-rose-500' : 'text-slate-500'}`}>
+              {versionStatus}
+            </p>
+          )}
 
           <div className="grid grid-cols-2 gap-2">
             <button
