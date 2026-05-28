@@ -2467,6 +2467,18 @@ function buildBlobUrl2(requestUrl, key) {
   }
   return `/blob/${key}`;
 }
+
+// node_modules/.pnpm/@rei-standard+amsg-instant@0.8.2/node_modules/@rei-standard/amsg-instant/dist/index.mjs
+var TEXT_ENCODER3 = new TextEncoder();
+var TEXT_DECODER3 = new TextDecoder("utf-8", { fatal: false });
+function utf83(str) {
+  return TEXT_ENCODER3.encode(String(str));
+}
+var KEY_INFO_PREFIX3 = utf83("WebPush: info\0");
+var CEK_INFO3 = utf83("Content-Encoding: aes128gcm\0");
+var NONCE_INFO3 = utf83("Content-Encoding: nonce\0");
+var VAPID_TOKEN_LIFETIME3 = 12 * 3600;
+var PUSH_PAYLOAD_BYTE_ENCODER3 = new TextEncoder();
 function segmentTextWithProtectedBlocks(text, options) {
   if (!text) return [];
   const splitAndSanitize = (plainText) => {

@@ -48,11 +48,11 @@ importers:
         specifier: 2.3.0
         version: 2.3.0
       '@rei-standard/amsg-instant':
-        specifier: 0.8.1
-        version: 0.8.1
+        specifier: 0.8.2
+        version: 0.8.2
       '@rei-standard/amsg-server':
-        specifier: 2.4.0
-        version: 2.4.0(@neondatabase/serverless@1.1.0)(pg@8.21.0)
+        specifier: 2.4.1
+        version: 2.4.1(@neondatabase/serverless@1.1.0)(pg@8.21.0)
       '@rei-standard/amsg-shared':
         specifier: 0.1.0
         version: 0.1.0
@@ -106,8 +106,8 @@ importers:
   worker/instant-push:
     dependencies:
       '@rei-standard/amsg-instant':
-        specifier: 0.8.1
-        version: 0.8.1
+        specifier: 0.8.2
+        version: 0.8.2
       '@rei-standard/amsg-shared':
         specifier: 0.1.0
         version: 0.1.0
@@ -855,12 +855,12 @@ packages:
     resolution: {integrity: sha512-P8tI4Fh31OFaE5CjLKtsUZYYVWWznUA7q0akl+LRrF6xE/xj4XzNE5woA2C4ELVnlsOzKxxxnwe1RYEF5mvO/Q==}
     engines: {node: '>=20'}
 
-  '@rei-standard/amsg-instant@0.8.1':
-    resolution: {integrity: sha512-amNQrpRCSvpGXJ++xAqg5ZfRRsVTAKrdpWwTuXWf1GdeVRNV2wjsE3NADDL2W0VUUTup5P+GQ7jhon2iavKgqQ==}
+  '@rei-standard/amsg-instant@0.8.2':
+    resolution: {integrity: sha512-3lnzaqhg25IIBKGLCO+q8J079KOaQm/cMgzez4Y9/WyOGUZllr+B/U54oqLV6iPa4uRCisy0mFOP/RgZqNi9EQ==}
     engines: {node: '>=18'}
 
-  '@rei-standard/amsg-server@2.4.0':
-    resolution: {integrity: sha512-/zNhyg5CzrPhqUuIQdBBlYQ7m5Y81AJcDzh+UNa+PsuYr5fs/FSbkCTxgr+z3USqnu7A9H0nqKCC9CwH/nbYVg==}
+  '@rei-standard/amsg-server@2.4.1':
+    resolution: {integrity: sha512-REa1Wwpew8yzefV76ng+9clbmKeq/kB7BEULJjzRu07LE0yk7ITKKeleJPBIFYGpyuOihfsFdQmVXolRISzVkw==}
     engines: {node: '>=20'}
     peerDependencies:
       '@neondatabase/serverless': '>=0.9.0'
@@ -2736,11 +2736,11 @@ snapshots:
     dependencies:
       '@rei-standard/amsg-shared': 0.1.0
 
-  '@rei-standard/amsg-instant@0.8.1':
+  '@rei-standard/amsg-instant@0.8.2':
     dependencies:
       '@rei-standard/amsg-shared': 0.1.0
 
-  '@rei-standard/amsg-server@2.4.0(@neondatabase/serverless@1.1.0)(pg@8.21.0)':
+  '@rei-standard/amsg-server@2.4.1(@neondatabase/serverless@1.1.0)(pg@8.21.0)':
     dependencies:
       '@netlify/blobs': 8.2.0
       '@rei-standard/amsg-shared': 0.1.0
