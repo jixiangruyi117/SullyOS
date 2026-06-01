@@ -19,7 +19,7 @@ type AnyPushPayload = {
   message?: string;
   messageKind?: string;
   messageId?: string;
-  notification?: { title?: string; body?: string };
+  notification?: { show?: string; title?: string; body?: string };
   metadata?: Record<string, unknown>;
   toolCalls?: Array<{ function: { name: string } }>;
 };
@@ -40,7 +40,7 @@ describe('buildPushDecision D 系列 (pushPayloads 数组)', () => {
     // raw 跟 sanitized 在普通文本上一样, 但都塞 notification.body (0.8+ 不再
     // 用条件去重, lib 不 clone notification 跨 chunk, 每条独立)
     expect(ps[0].message).toBe('你好');
-    expect(ps[0].notification).toEqual({ title: '来自 X', body: '你好' });
+    expect(ps[0].notification).toEqual({ show: 'when-hidden', title: '来自 X', body: '你好' });
     expect(ps[0].metadata?.directives).toEqual([]);
   });
 

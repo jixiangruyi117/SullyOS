@@ -43,8 +43,8 @@ const Chat: React.FC = () => {
         } catch { return 0; }
     }, []);
     const [messages, setMessages] = useState<Message[]>([]);
-    // Instant Push 路径："准备中"三个点 = 消息正在拼接+发送; 消失 = 已 POST 发出 (keepalive,
-    // 杀 PWA 也安全) = 可安全离开. true 从触发置起, onInstantPosted (= fetch dispatch) 置回 false。
+    // Instant Push 路径："准备中"三个点 = 消息正在拼接+发送; 消失 = SSE POST 已排进
+    // 浏览器网络栈. 页面关闭时会主动 abort SSE, 让 worker 尽量走 Web Push fallback。
     const [instantSendingActive, setInstantSendingActive] = useState(false);
     const [instantToolStatus, setInstantToolStatus] = useState<InstantToolUiStatus | null>(null);
     const [totalMsgCount, setTotalMsgCount] = useState(0);
@@ -853,15 +853,14 @@ const Chat: React.FC = () => {
         // 否则保留手动 ⚡（避免"启用 instant = 自动回复"的反直觉强绑定）。
         const instantCfg = loadInstantConfig();
         if (type === 'text' && isInstantConfigReady(instantCfg) && instantCfg.autoTriggerOnSend) {
-            // 标记"准备中"三个点：拼接+发送期间显示，POST 真正发出 (onInstantPosted) 后清除，
-            // 提示用户此时可安全离开 (杀 PWA 也没事)。
+            // 标记"准备中"三个点：拼接+发送期间显示，SSE POST 入队 (onInstantPosted) 后清除。
             setInstantSendingActive(true);
             triggerAI(messages, undefined, () => setInstantSendingActive(false));
         }
     };
 
     // 顶栏 ⚡ 手动触发。instant 模式下给"上一条 assistant 之后的所有 user 消息"打上"准备中"
-    // 三个点（从写入 DB 到 POST 200 之间），POST 被 worker 接收后由 onInstantPosted 清除 ——
+    // 三个点（从写入 DB 到 SSE POST 入队之间），由 onInstantPosted 清除 ——
     // 与 autoTriggerOnSend 自动路径的指示器行为一致。本地模式无此指示器，直接 triggerAI。
     const handleManualTrigger = () => {
         if (!isInstantConfigReady()) { triggerAI(messages); return; }

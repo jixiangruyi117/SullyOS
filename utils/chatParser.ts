@@ -302,7 +302,11 @@ export const ChatParser = {
     chunkText: (text: string): string[] => {
         // CJK character + punctuation ranges (Chinese text normally has no spaces between these)
         const CJK = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uff00-\\uffef\\u2000-\\u206f\\u2e80-\\u2eff\\u3001-\\u3003\\u2018-\\u201f\\u300a-\\u300f\\uff01-\\uff0f\\uff1a-\\uff20';
-        const cjkSpaceRe = new RegExp(`(?<=[${CJK}])\\s+(?=[${CJK}])`);
+        // 在两个 CJK 之间的空格处断行. 不用后行断言 (?<=…): iOS Safari <16.4 的 JSC 不支持,
+        // 旧设备上 new RegExp 会直接抛 "invalid group specifier name". 改成「捕获左侧 CJK + 零宽
+        // 前瞻右侧」, 用 $1 补回左字符, 行为与原 (?<=[CJK])\s+(?=[CJK]) 字节一致 (见 lookbehindFree.test.ts).
+        const cjkSplitRe = new RegExp(`([${CJK}])\\s+(?=[${CJK}])`, 'g');
+        const SPLIT = String.fromCharCode(1);  // CJK 切点标记
 
         // 1. Split on line breaks (AI decides where to break)
         const lineChunks = text.split(/(?:\r\n|\r|\n|\u2028|\u2029)+/)
@@ -318,7 +322,7 @@ export const ChatParser = {
         const result: string[] = [];
         for (const chunk of lineChunks) {
             const guarded = chunk.replace(/\[{1,2}[^\[\]]*\]{1,2}/g, m => m.replace(/\s/g, SENTINEL));
-            const sub = guarded.split(cjkSpaceRe)
+            const sub = guarded.replace(cjkSplitRe, `$1${SPLIT}`).split(SPLIT)
                 .map(c => c.split(SENTINEL).join(' ').trim())
                 .filter(c => c.length > 0);
             result.push(...sub);

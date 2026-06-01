@@ -1010,7 +1010,15 @@ ${attachedImagesNote}
 
                     // Fallback: split on spaces between CJK characters (中文里空格=AI想换行)
                     if (chunks.length <= 1 && textContent.trim().length > 50) {
-                        chunks = textContent.split(/(?<=[\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u2000-\u206f\u2e80-\u2eff\u3001-\u3003\u2018-\u201f\u300a-\u300f\uff01-\uff0f\uff1a-\uff20])\s+(?=[\u4e00-\u9fff\u3400-\u4dbf])/)
+                        // No lookbehind (?<=): iOS Safari <16.4 JSC doesn't support it; old
+                        // devices throw "invalid group specifier name" at new RegExp. Capture the
+                        // left char (full punct set) + zero-width lookahead on the right (Han only),
+                        // mark split points with \x01, restore left char via $1. Left/right sets
+                        // differ, so they can't be merged. Byte-equivalent (see lookbehindFree.test.ts).
+                        const SPLIT = String.fromCharCode(1);
+                        chunks = textContent
+                            .replace(/([\u4e00-\u9fff\u3400-\u4dbf\u3000-\u303f\uff00-\uffef\u2000-\u206f\u2e80-\u2eff\u3001-\u3003\u2018-\u201f\u300a-\u300f\uff01-\uff0f\uff1a-\uff20])\s+(?=[\u4e00-\u9fff\u3400-\u4dbf])/g, `$1${SPLIT}`)
+                            .split(SPLIT)
                             .map(c => c.trim())
                             .filter(c => c.length > 0);
                     }

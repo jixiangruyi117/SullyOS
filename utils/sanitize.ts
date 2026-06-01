@@ -405,7 +405,11 @@ function sanitizeTextForBanner(text: string): string {
  */
 function chunkText(text: string): string[] {
   const CJK = '\\u4e00-\\u9fff\\u3400-\\u4dbf\\u3000-\\u303f\\uff00-\\uffef\\u2000-\\u206f\\u2e80-\\u2eff\\u3001-\\u3003\\u2018-\\u201f\\u300a-\\u300f\\uff01-\\uff0f\\uff1a-\\uff20';
-  const cjkSpaceRe = new RegExp(`(?<=[${CJK}])\\s+(?=[${CJK}])`);
+  // No lookbehind (?<=): iOS Safari <16.4 JSC doesn't support it; old devices throw
+  // "invalid group specifier name" at new RegExp. Capture the left CJK char + zero-width
+  // lookahead on the right, restore via $1. Byte-equivalent (see utils/lookbehindFree.test.ts).
+  const cjkSplitRe = new RegExp(`([${CJK}])\\s+(?=[${CJK}])`, 'g');
+  const SPLIT = String.fromCharCode(1);  // CJK split marker (distinct slot from SPACE_SENTINEL below)
 
   const lineChunks = text.split(/(?:\r\n|\r|\n|\u2028|\u2029)+/)
     .map((c) => c.trim())
@@ -418,7 +422,7 @@ function chunkText(text: string): string[] {
   const out: string[] = [];
   for (const chunk of lineChunks) {
     const guarded = chunk.replace(/\[{1,2}[^\[\]]*\]{1,2}/g, (m) => m.replace(/\s/g, SPACE_SENTINEL));
-    const sub = guarded.split(cjkSpaceRe)
+    const sub = guarded.replace(cjkSplitRe, `$1${SPLIT}`).split(SPLIT)
       .map((c) => c.split(SPACE_SENTINEL).join(' ').trim())
       .filter((c) => c.length > 0);
     out.push(...sub);

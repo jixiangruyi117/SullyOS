@@ -8,6 +8,7 @@ import {
   isDeadPushEndpoint,
   subscribeWithRetry,
 } from './pushSubscribeShared';
+import { ReiClient } from '@rei-standard/amsg-client';
 
 export const INSTANT_PUSH_CONFIG_KEY = 'instant_push_config_v1';
 
@@ -607,7 +608,10 @@ export async function sendInstantPush(
     return { ok: false, error: '请先在 Settings → Instant Push 里配置并保存' };
   }
   const url = `${normalizeWorkerUrl(cfg.workerUrl || '')}/instant`;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+  };
   if (cfg.clientToken) headers['X-Client-Token'] = cfg.clientToken;
   // amsg-instant 0.8+ 删了 splitPattern 字段, lib 不再做 split, hook
   // 自己返 pushPayloads 数组. caller 这边不用再兜底注入。
@@ -715,6 +719,71 @@ export interface InstantAwaitResult {
 
 const DEFAULT_INSTANT_TIMEOUT_MS = 90_000;
 
+// SSE 流结束后, 再给「SW 派发 → 客户端 flushInboxToChat 写完 DB」这一跳的宽限时长。
+// 流跑完 (stream_done) 只代表 payload 都交给了 SW, 不代表已落库; 真正的成功信号是
+// active-msg-received。这一跳正常 <1s, 给 8s 容错 (含 applyAssistantPostProcessing)。
+const SSE_FLUSH_GRACE_MS = 8_000;
+
+// /instant 与 /continue 都把预分配的 sessionId 作为 SW 投递的 requestId; 优先取
+// payload 自带的 instantTraceId (老格式兼容), 否则回落 sessionId / messageId。
+function resolveInstantTraceId(payload: any, fallback?: string): string {
+  const candidate =
+    payload?.metadata?.instantTraceId ||
+    payload?.sessionId ||
+    payload?.messageId ||
+    fallback ||
+    'no-trace';
+  return String(candidate);
+}
+
+export async function postSsePayloadToServiceWorker(
+  payload: any,
+  traceId?: string,
+  timeoutMs = 5_000,
+): Promise<boolean> {
+  const resolvedTraceId = resolveInstantTraceId(payload, traceId);
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+    return false;
+  }
+
+  const controller = navigator.serviceWorker.controller;
+  if (!controller) {
+    return false;
+  }
+
+  // 把 SSE 直达 payload 交给 SW 走通用 REI_AMSG_DELIVER 路由 (inbox/tool/emotion + dedupe)。
+  // 用 MessageChannel 等 SW 回 ack: ok=true 表示 SW 收下 (可能是去重命中), 超时/异常按未达处理。
+  return await new Promise<boolean>((resolve) => {
+    const channel = new MessageChannel();
+    let settled = false;
+
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { channel.port1.close(); } catch { /* ignore */ }
+      resolve(ok);
+    };
+
+    const timer = window.setTimeout(() => finish(false), timeoutMs);
+
+    channel.port1.onmessage = (event) => {
+      finish(!!(event.data || {}).ok);
+    };
+
+    try {
+      controller.postMessage({
+        type: 'REI_AMSG_DELIVER',
+        payload,
+        source: 'sse',
+        requestId: resolvedTraceId,
+      }, [channel.port2]);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
 function buildContextDiag(business: InstantBusinessPayload): InstantDiagnostics['context'] {
   let msgBytes: number | undefined;
   try {
@@ -737,6 +806,12 @@ export async function sendInstantPushAndAwaitReply(
   timeoutMs: number = DEFAULT_INSTANT_TIMEOUT_MS,
   onPosted?: () => void,
 ): Promise<InstantAwaitResult> {
+  // Phase 2 Round 1: 预分配 sessionId, 把 outbound session (messages + apiCredentials) 写到
+  // IndexedDB 后传给 worker. amsg-instant 0.6.x 忽略该字段, 0.8+ 用作 agentic-loop /continue
+  // 续跑标识.
+  const sessionId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+    ? crypto.randomUUID()
+    : `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const env = await collectEnvSnapshot();
   const context = buildContextDiag(business);
 
@@ -777,7 +852,6 @@ export async function sendInstantPushAndAwaitReply(
       },
     };
   }
-
   // 必须先挂监听再 send，否则极快的 push 可能漏掉
   let pushResolver: () => void = () => {};
   let receivedPushDetail: any = null;
@@ -791,13 +865,6 @@ export async function sendInstantPushAndAwaitReply(
   };
   window.addEventListener('active-msg-received', pushHandler);
 
-  // Phase 2 Round 1: 预分配 sessionId, 把 outbound session (messages + apiCredentials) 写到
-  // IndexedDB 后传给 worker. amsg-instant 0.6.x 忽略该字段, 0.8+ 用作 agentic-loop /continue
-  // 续跑标识. crypto.randomUUID 在所有目标环境 (Safari 15.4+ / Chrome 92+) 可用; SSR 中性,
-  // 该路径只在浏览器执行.
-  const sessionId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
-    ? crypto.randomUUID()
-    : `sess-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   try {
     await ActiveMsgStore.saveOutboundSession({
       sessionId,
@@ -818,51 +885,59 @@ export async function sendInstantPushAndAwaitReply(
   }
 
   const sendStartedAt = Date.now();
+  const abortController = new AbortController();
+  const abortOnPageHide = (event: PageTransitionEvent) => {
+    if (event.persisted) return;
+    abortController.abort();
+  };
+  let pageHideListenerAttached = false;
   try {
-    // keepalive: true 让 fetch 在进程被杀后仍能完成（iOS PWA swipe-kill 关键保障）
-    // onDispatched 在 fetch 同步排进网络栈后立刻 fire，UI 此时即可取消"准备中"
-    // 半透明态 —— 不等 response，因为 worker 是同步阻塞跑完 LLM+push 才 200
-    const sendResult = await sendInstantPush(
-      { ...business, pushSubscription: sub, sessionId },
-      { keepalive: true, onDispatched: onPosted },
-    );
-    if (!sendResult.ok) {
-      appendDevDebugLlmLog({
-        url: cfg.workerUrl,
-        method: 'POST',
-        status: sendResult.http?.status,
-        requestBody: {
-          transport: 'instant-push',
-          sessionId,
-          ...business,
-          apiKey: business.apiKey ? '<redacted>' : '',
-        },
-        response: sendResult,
-      });
-      return {
-        ok: false,
-        outcome: 'send-failed',
-        error: sendResult.error,
-        diagnostics: {
-          env, context,
-          http: sendResult.http,
-          fetchError: sendResult.fetchError,
-          payloadTop: sendResult.payloadTop,
-        },
-      };
-    }
+    const wirePayload: InstantPushPayload = {
+      ...business,
+      pushSubscription: sub,
+      sessionId,
+      oversizeTransport: getInstantOversizeTransport(cfg),
+    };
 
-    const timedOut = await Promise.race([
-      pushArrived.then(() => false as const),
-      new Promise<true>((r) => setTimeout(() => r(true), timeoutMs)),
+    window.addEventListener('pagehide', abortOnPageHide, { once: true });
+    pageHideListenerAttached = true;
+
+    const reiClient = new ReiClient({
+      baseUrl: normalizeWorkerUrl(cfg.workerUrl || ''),
+      instantEncryption: false,
+      instantClientToken: cfg.clientToken || '',
+    });
+
+    // postSsePayloadToServiceWorker 投递失败时 resolve(false) 而非 throw, 单看 stream
+    // 是否跑完识别不出失败。这里记下投递结果, 供下面 stream_done 分支判定 / 诊断用。
+    let sseDeliveredOk = false;
+    let sseDeliveryFailed = false;
+    const streamPromise = reiClient.consumeInstantStream(wirePayload, '/instant', {
+      signal: abortController.signal,
+      onPayload: async (p: any) => {
+        const delivered = await postSsePayloadToServiceWorker(p);
+        if (delivered) sseDeliveredOk = true;
+        else sseDeliveryFailed = true;
+      },
+    });
+    // `consumeInstantStream()` calls fetch() synchronously before its first await,
+    // so the request is now queued in the browser network stack.
+    onPosted?.();
+
+    const result = await Promise.race([
+      pushArrived.then(() => 'arrived' as const),
+      streamPromise.then(() => 'stream_done' as const),
+      new Promise<'timeout'>((r) => setTimeout(() => r('timeout'), timeoutMs)),
     ]);
-    if (timedOut) {
+
+    if (result === 'timeout') {
+      abortController.abort();
       appendDevDebugLlmLog({
         url: cfg.workerUrl,
         method: 'POST',
         status: 200,
         requestBody: {
-          transport: 'instant-push',
+          transport: 'instant-push-sse',
           sessionId,
           ...business,
           apiKey: business.apiKey ? '<redacted>' : '',
@@ -880,19 +955,65 @@ export async function sendInstantPushAndAwaitReply(
           env, context,
           timeout: {
             waitedMs: Date.now() - sendStartedAt,
-            // sendResult.ok=true 走到这里, 说明 worker 至少返了 2xx + success:true,
-            // 但 push 没回 SW —— 关键 debug 信号: dispatched 成功只是失败方向缩窄了一半
             httpStatusWhenDispatched: 200,
           },
         },
       };
     }
+
+    // result === 'arrived' 才是确定成功 (active-msg-received 已 fire = 消息落库)。
+    // result === 'stream_done' 只代表 worker 流结束 + payload 交给了 SW, 此时再给落库
+    // 这一跳一个短宽限: 等到 pushArrived 才算成功; 等不到按未达处理, 杜绝「流跑完就报
+    // 成功」的误报 (含 SW 投递失败只 resolve(false) 不抛、worker 因 SSE「成功」不再补
+    // Web Push 兜底 → 消息静默丢失却报 received 的情形)。
+    if (result === 'stream_done') {
+      const flushed = await Promise.race([
+        pushArrived.then(() => true),
+        new Promise<boolean>((r) => setTimeout(() => r(false), SSE_FLUSH_GRACE_MS)),
+      ]);
+      if (!flushed) {
+        abortController.abort();
+        const waitedMs = Date.now() - sendStartedAt;
+        appendDevDebugLlmLog({
+          url: cfg.workerUrl,
+          method: 'POST',
+          status: 200,
+          requestBody: {
+            transport: 'instant-push-sse',
+            sessionId,
+            ...business,
+            apiKey: business.apiKey ? '<redacted>' : '',
+          },
+          response: {
+            outcome: 'timeout',
+            reason: sseDeliveryFailed ? 'sse-delivery-failed' : 'flush-not-confirmed',
+            sseDeliveredOk,
+            waitedMs,
+          },
+        });
+        return {
+          ok: false,
+          outcome: 'timeout',
+          error: sseDeliveryFailed
+            ? 'AI 回复已生成，但本机 Service Worker 未确认收下（无 controller / 通道异常），消息可能未落库 —— 刷新页面后重试'
+            : `AI 回复已生成，但 ${Math.round(SSE_FLUSH_GRACE_MS / 1000)}s 内未确认写入本地 —— 刷新页面后重试`,
+          diagnostics: {
+            env, context,
+            timeout: {
+              waitedMs,
+              httpStatusWhenDispatched: 200,
+            },
+          },
+        };
+      }
+    }
+
     appendDevDebugLlmLog({
       url: cfg.workerUrl,
       method: 'POST',
       status: 200,
       requestBody: {
-        transport: 'instant-push',
+        transport: 'instant-push-sse',
         sessionId,
         ...business,
         apiKey: business.apiKey ? '<redacted>' : '',
@@ -903,7 +1024,35 @@ export async function sendInstantPushAndAwaitReply(
       },
     });
     return { ok: true, outcome: 'received' };
+  } catch (err: any) {
+    appendDevDebugLlmLog({
+      url: cfg.workerUrl,
+      method: 'POST',
+      status: 500,
+      requestBody: {
+        transport: 'instant-push-sse',
+        sessionId,
+        ...business,
+        apiKey: business.apiKey ? '<redacted>' : '',
+      },
+      response: {
+        outcome: 'send-failed',
+        error: String(err),
+      },
+    });
+    return {
+      ok: false,
+      outcome: 'send-failed',
+      error: err?.message || String(err),
+      diagnostics: {
+        env, context,
+        fetchError: { message: err?.message || String(err) },
+      },
+    };
   } finally {
+    if (pageHideListenerAttached) {
+      try { window.removeEventListener('pagehide', abortOnPageHide); } catch { /* ignore */ }
+    }
     window.removeEventListener('active-msg-received', pushHandler);
   }
 }

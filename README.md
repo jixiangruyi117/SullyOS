@@ -227,17 +227,19 @@ VITE_HIDE_BUILD_BADGE=1 npm run build
 
 非 release 分支构建时（即 `__BUILD_BADGE_VISIBLE__` 为 `true`），右下角除了 build badge 还会多一颗小扳手浮球。点开就是 **DevDebugPanel**——一个可拖拽的调试面板，专治"角色怎么又不说话了"综合症。
 
-面板里有三个开关：
+面板里有两类开关——**行为开关**（改变跑的逻辑）和**分类捕获**（勾哪类抓哪类日志）：
 
-| 开关 | 干嘛的 |
-|------|--------|
-| **Skip Prompt Build** | 跳过 `ContextBuilder` 的整套 prompt 组装，直接把你的裸消息怼给 LLM。用来排查"是 prompt 太长撑爆了还是 API 本身炸了" |
-| **Skip Emotion Eval** | 跳过消息落库后的情绪评估管线（Russell 空间那套）。怀疑情绪评估拖慢响应 / 报错时开它 |
-| **Capture LLM Log** | 开始录制所有 LLM 请求/响应（含 Instant Push 通道）。录完可以一键复制成 JSON 丢给别人 debug，密钥字段自动 `<redacted>` 不用手动打码 |
+| 开关 | 类型 | 干嘛的 |
+|------|------|--------|
+| **Skip Prompt Build** | 行为 | 跳过 `ContextBuilder` 的整套 prompt 组装，直接把你的裸消息怼给 LLM。用来避免它被人设束缚、不配合你输出你想要的调试内容 |
+| **Skip Emotion Eval** | 行为 | 跳过消息落库后的情绪评估管线（Russell 空间那套）。不需要调试情绪的时候可以打开（不配置日程也行）。 |
+| **记录 LLM 日志** | 捕获 | 勾上就录制所有 LLM 请求/响应（含 Instant Push 通道）。密钥字段自动 `<redacted>` 不用手动打码。以后想抓别的（MCP 调用之类）就再加一个捕获类，互不串桶 |
 
-LLM 日志同时写 `localStorage` 和内存，最多保留 50 条 / 64 KB（先到先淘汰）。日志导出会自动带上当前分支和 commit hash，方便定位"到底是哪个版本炸的"。
+捕获日志同时写 `localStorage` 和内存，各类混存、全局最多保留 100 条 / 1 MB（先到先淘汰）。为了省空间 / 隐私，**长文本默认写入时就折叠成前 10 字 + `...`**（那堆 system prompt 和聊天历史不会塞满 localStorage）；真要看完整请求体，打开「记录完整内容」开关再复现一次。录完可以**一键复制成 JSON** 或**下载成文件**丢给别人 debug，导出会自动带上当前分支和 commit hash，方便定位"到底是哪个版本炸的"。
 
 **注意**：跟 build badge 一样，这整套调试 UI 走的是 Vite `define` 编译时注入。在 `main` / `master` 上 `npm run build` 出来的产物里，`DevDebugPanel` 组件连同相关代码会被 esbuild 整棵树摇掉，不会出现在生产包里。换句话说——**用户永远看不到这个扳手，除非你故意在 release 分支 `VITE_SHOW_BUILD_BADGE=1`**。
+
+> 想加新开关 / 加 debug-only 日志？照着 [`docs/dev-debug.md`](./docs/dev-debug.md) 抄就行，里面有逐步指南和容易踩的坑。
 
 > 叮叮叮！调试面板不会让你的 Bug 自动修好，但至少能让你知道 Bug 在哪。大概。
 

@@ -13,7 +13,6 @@
 
 import { createCloudflareWorker } from '@rei-standard/amsg-instant/adapters/cloudflare';
 import { createD1BlobStore } from '@rei-standard/amsg-instant/blob/d1';
-import { sendPushWithMaybeBlob } from '@rei-standard/amsg-instant';
 import {
   buildContentPush,
   buildToolRequestPush,
@@ -332,25 +331,61 @@ const cfWorker = createCloudflareWorker((env: Env) => {
     ...buildAmsgOptions(env),
     clientToken: env.AMSG_CLIENT_TOKEN,
     maxLoopIterations: 10,
+    sse: {
+      backupPush: 'on',
+      keepaliveMs: 1_000,
+      immediateKeepalive: true,
+    },
     onLLMOutput,
+    onBeforeLoop: ({ requestBody }: any) => {
+      if (!requestBody?.emotionEval) return undefined;
+      // Start emotion eval in parallel (returns promise)
+      return { emotionEval: runEmotionEval(requestBody) };
+    },
+    onAfterLoop: async ({ deliver, pending, requestBody, sessionId }: any) => {
+      if (!pending?.emotionEval) return;
+
+      try {
+        const emotionRaw = await pending.emotionEval;
+        // 无论成功 / 失败 / 空结果都推一条 emotion_update (emotionRaw 可能为空字符串):
+        // 客户端据此熄灭 "情绪分析中" 徽章, 否则只能等本地安全超时, 体验上像卡死.
+        const charId = requestBody?.charId || requestBody?.metadata?.charId || '';
+        await deliver({
+          messageKind: 'emotion_update',
+          messageId: `msg_${sessionId}_emotion`,
+          sessionId,
+          metadata: {
+            ...(requestBody?.metadata || {}),
+            charId,
+            emotionRaw,
+          },
+          notification: {
+            show: 'when-hidden',
+            silent: true,
+            title: requestBody?.contactName ? `来自 ${requestBody.contactName}` : '主动消息',
+            tag: `chat-message-${charId}`,
+            body: '对方的情绪产生了波动...',
+          }
+        });
+      } catch (err) {
+        console.warn('[instant] emotion eval failed in onAfterLoop:', err);
+      }
+    },
   };
 });
 
 /**
  * 副 API 情绪评估 (worker 端). 框架的 onLLMOutput hook 故意不暴露 apiKey、也不允许自己发 LLM/push
- * (见 amsg-instant SessionContext 文档), 所以情绪评估的第二次 LLM 调用 + emotion_update 推送
- * 在框架外、这层包装里做: 客户端把副 API 凭据 + 拼好的 eval prompt 放在请求体 emotionEval 字段,
- * 主回复跑完后 (cfWorker.fetch 返回后) 用 ctx.waitUntil 跑 eval, 把原始结果作为 emotion_update
- * push 推回. 客户端 SW 路由进 inbox, flush 时 applyEmotionEvalRaw 落 buff + 广播 innerState.
+ * (见 amsg-instant SessionContext 文档), 所以情绪评估的第二次 LLM 调用
+ * 在 onBeforeLoop 并行启动，在 onAfterLoop 里用 deliver (SSE/Push) 追加推送.
  *
- * 失败全吞 (情绪评估失败不该影响主回复); emotion_update 不带 notification, SW 静默入 inbox.
+ * 失败全吞 (情绪评估失败不该影响主回复); emotion_update 携带静默 notification 属性防系统拉黑，客户端仍静默入 inbox。.
  */
-async function runEmotionEval(body: any, env: Env, requestUrl?: string): Promise<void> {
+async function runEmotionEval(body: any): Promise<string> {
   const ee = body?.emotionEval;
-  const sub = body?.pushSubscription;
-  if (!ee?.prompt || !ee?.api?.baseUrl || !ee?.api?.apiKey || !ee?.api?.model) return;
-  if (!sub || typeof sub.endpoint !== 'string') return;
-  if (!env.VAPID_PUBLIC_KEY || !env.VAPID_PRIVATE_KEY) return;
+  if (!ee?.prompt || !ee?.api?.baseUrl || !ee?.api?.apiKey || !ee?.api?.model) {
+    return '';
+  }
 
   const charId = (body?.metadata && typeof body.metadata === 'object') ? body.metadata.charId : '';
   // 情绪评估 = 单条 user 消息, 与本地 buildEmotionEvalPrompt 输出**逐字对齐**. 客户端把 prompt 里
@@ -390,7 +425,6 @@ async function runEmotionEval(body: any, env: Env, requestUrl?: string): Promise
   const evalMessages = [{ role: 'user', content: evalContent }];
   try {
     const baseUrl = String(ee.api.baseUrl).replace(/\/+$/, '');
-    console.log('[TIMING] emotion: LLM call start', new Date().toISOString());
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -404,7 +438,6 @@ async function runEmotionEval(body: any, env: Env, requestUrl?: string): Promise
         stream: false,
       }),
     });
-    console.log('[TIMING] emotion: LLM call done', res.status, new Date().toISOString());
     let raw = '';
     if (res.ok) {
       const data: any = await res.json();
@@ -413,28 +446,10 @@ async function runEmotionEval(body: any, env: Env, requestUrl?: string): Promise
       console.error('[emotion-eval] LLM call failed', res.status);
     }
 
-    // 无论成功 / 失败 / 空结果都推一条 emotion_update (emotionRaw 可能为空字符串):
-    // 客户端据此熄灭 "情绪分析中" 徽章, 否则只能等本地安全超时, 体验上像卡死.
-    const pushObj = {
-      messageKind: 'emotion_update',
-      messageType: MESSAGE_TYPE.INSTANT,
-      source: PUSH_SOURCE.INSTANT,
-      sessionId: body?.sessionId || '',
-      contactName: body?.contactName || '',
-      message: '',
-      messageId: `msg_${body?.sessionId || Date.now()}_emotion`,
-      timestamp: Date.now(),
-      metadata: { charId, emotionRaw: raw },
-    };
-
-    // Reuse amsg's oversize transport so large emotionRaw payloads do not exceed Web Push limits.
-    await sendPushWithMaybeBlob(pushObj, { pushSubscription: sub }, {
-      ...buildAmsgOptions(env),
-      requestUrl,
-    } as any, body?.sessionId || '');
-    console.log('[TIMING] emotion: push sent', new Date().toISOString());
+    return raw;
   } catch (e) {
     console.error('[emotion-eval] failed', e);
+    return '';
   }
 }
 
@@ -462,18 +477,11 @@ export default {
     } catch {
       body = null; // 非 JSON / 解析失败: 不影响主路径
     }
-    const requestedEnv = withRequestOversizeTransport(env, body);
+    const requestedEnv = withRequestOversizeTransport({ ...env }, body);
     const workerEnv = await prepareBlobStoreEnv(requestedEnv);
     scheduleD1BlobCleanup(workerEnv, ctx);
 
-    // 情绪评估不依赖主回复内容 (用 body.messages = 与主回复同一批消息, 跟本地一样不含新回复),
-    // 所以与主回复**并行**跑, 而不是 await cfWorker.fetch (流式输出 + 推送 + 收尾可能拖 ~30s)
-    // 完成后才启动 —— 砍掉情绪评估的启动延迟, 让 buff / "情绪分析中" 徽章尽快结算.
-    if (body?.emotionEval) {
-      console.log('[TIMING] emotion: dispatched', new Date().toISOString());
-      ctx.waitUntil(runEmotionEval(body, workerEnv, request.url));
-    }
-    console.log('[TIMING] reply: dispatched', new Date().toISOString());
+    // 主回复由 amsg-instant 内部的 onBeforeLoop / waitUntil 驱动。
     return await (cfWorker as any).fetch(request, workerEnv, ctx);
   },
   async scheduled(_event: unknown, env: Env) {
@@ -492,7 +500,7 @@ export default {
  *            iteration, metadata, contactName, avatarUrl, llmResponse, ... }
  */
 async function onLLMOutput(ctx: any) {
-  return buildPushDecision({
+  const decision = buildPushDecision({
     llmOutputText: String(ctx.llmOutputText ?? ''),
     sessionId: ctx.sessionId,
     iteration: Number(ctx.iteration ?? 0),
@@ -501,6 +509,7 @@ async function onLLMOutput(ctx: any) {
     // metadata 透传: 客户端 sendInstantPush 时塞了 charId; SW 路由要它分发到具体角色
     callerMetadata: (ctx.metadata && typeof ctx.metadata === 'object') ? ctx.metadata : {},
   });
+  return decision;
 }
 
 // ─── Pure logic: 抽出来给单测 ──────────────────────────────────────────────
@@ -702,7 +711,7 @@ function buildSegmentPush(args: {
         ...(directives !== undefined ? { directives } : {}),
       },
     }),
-    notification: { title: notificationTitle, body: seg.sanitized },
+    notification: { show: 'when-hidden', title: notificationTitle, body: seg.sanitized },
   };
 }
 

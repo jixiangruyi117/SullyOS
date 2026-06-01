@@ -986,7 +986,9 @@ export const useChatAI = ({
             });
 
         } catch (e: any) {
-            await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[连接中断: ${e.message}]` });
+            // 注意: 这个 catch 兜的是「拿到 API 响应之后」的整条后处理管线 (applyAssistantPostProcessing,
+            // 13 步)。这里抛错多半不是网络问题, 而是解析/正则/落库异常。别再叫"连接中断"误导排查。
+            await DB.saveMessage({ charId: char.id, role: 'system', type: 'text', content: `[回复处理失败: ${e.message}]` });
             setMessages(await DB.getRecentMessagesByCharId(char.id, 200));
         } finally {
             KeepAlive.stop();

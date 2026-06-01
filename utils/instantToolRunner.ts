@@ -23,10 +23,11 @@ import {
   loadInstantConfig,
   isInstantConfigReady,
   getOrCreateInstantSubscription,
-  byteLengthOf,
   getInstantOversizeTransport,
+  postSsePayloadToServiceWorker,
 } from './instantPushClient';
 import { pushXhsCaches, pushLastXhsNotesRef } from './activeMsgRuntime';
+import { ReiClient } from '@rei-standard/amsg-client';
 import type { APIConfig, RealtimeConfig, UserProfile, InstantPushPendingToolCall } from '../types';
 
 type InstantToolStatusPhase = 'running' | 'continuing' | 'done' | 'failed';
@@ -162,12 +163,9 @@ async function runOnePendingToolCall(item: InstantPushPendingToolCall): Promise<
     return false;
   }
 
-  // 4. POST /continue. body 形状 = /instant + sessionId + iteration. apiCredentials 从
+  // 4. POST /continue. payload 形状 = /instant + sessionId + iteration. apiCredentials 从
   //    outbound_session 取 (sendInstantPush 时记下的, 跨 round 用同一组).
   const apiConfig = loadApiConfigFromLocalStorage();
-  const url = `${cfg.workerUrl.replace(/\/+$/, '')}/continue`;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (cfg.clientToken) headers['X-Client-Token'] = cfg.clientToken;
 
   // iteration: SW 在 savePendingToolCall 时持久化了上一轮 worker hook 看到的 iteration
   // (从 push.metadata.iteration 透传). /continue 必须严格递增, worker 端 fail-fast 400 守.
@@ -178,7 +176,7 @@ async function runOnePendingToolCall(item: InstantPushPendingToolCall): Promise<
   // 用 worker 自己的默认图标. 同 useChatAI.ts:693 的处理.
   const safeAvatarUrl = /^https?:\/\//i.test(char.avatar || '') ? char.avatar : undefined;
 
-  const body = JSON.stringify({
+  const continuePayload = {
     sessionId: item.sessionId,
     iteration: nextIteration,
     messages: nextMessages,
@@ -192,33 +190,44 @@ async function runOnePendingToolCall(item: InstantPushPendingToolCall): Promise<
     metadata: { charId: item.charId, charName: char.name },
     temperature: 0.8,
     oversizeTransport: getInstantOversizeTransport(cfg),
-  });
+  };
 
   try {
     emitToolStatus(item.charId, 'continuing', `${toolLabel}完成了，正在让角色继续回复。`, item.sessionId);
-    // keepalive 64KiB 上限按 UTF-8 字节算, 用 body.length (UTF-16 单元) 会让带
-    // 中文 tool 结果 (小红书 / 飞书读日记) 的 /continue 在边界 case 误放行, 浏览器拒发,
-    // fetch 抛 TypeError: Failed to fetch. byteLengthOf 跟 instantPushClient 守卫同一份.
-    const res = await fetch(url, { method: 'POST', headers, body, keepalive: byteLengthOf(body) <= 60 * 1024 });
-    const text = await res.text().catch(() => '');
-    if (!res.ok) {
-      console.error('[instant-tool-runner] /continue HTTP failed', res.status, text);
-      emitToolStatus(item.charId, 'failed', `${toolLabel}完成了，但续写请求失败了。`, item.sessionId);
-      return false;
+    const reiClient = new ReiClient({
+      baseUrl: cfg.workerUrl,
+      instantEncryption: false,
+      instantClientToken: cfg.clientToken || '',
+    });
+    const abortController = new AbortController();
+    const abortOnPageHide = (event: PageTransitionEvent) => {
+      if (event.persisted) return;
+      abortController.abort();
+    };
+    window.addEventListener('pagehide', abortOnPageHide, { once: true });
+
+    try {
+      await reiClient.consumeInstantStream(continuePayload, '/continue', {
+        signal: abortController.signal,
+        onPayload: async (p: any) => {
+          await postSsePayloadToServiceWorker(p, item.sessionId);
+        },
+        onDone: () => {
+          emitToolStatus(item.charId, 'done', `${toolLabel}完成了，角色回复已送达。`, item.sessionId);
+        },
+        onError: (err: any) => {
+          console.warn('[instant-tool-runner] /continue SSE stream error:', err?.code, err?.message);
+          // Error payload has already been ingested via onPayload before onError fires.
+          emitToolStatus(item.charId, 'failed', `${toolLabel}完成了，但续写发生错误。`, item.sessionId);
+        },
+      });
+    } finally {
+      try { window.removeEventListener('pagehide', abortOnPageHide); } catch { /* ignore */ }
     }
-    let parsed: any;
-    try { parsed = text ? JSON.parse(text) : null; } catch { /* ignore */ }
-    if (parsed && parsed.success === false) {
-      console.error('[instant-tool-runner] /continue worker rejected', parsed.error);
-      emitToolStatus(item.charId, 'failed', `${toolLabel}完成了，但 worker 拒绝了续写请求。`, item.sessionId);
-      return false;
-    }
-    // status === 'loop_exceeded' 也是 HTTP 200 + success:true (见 amsg-instant 错误码表),
-    // 我们不在这里弹错; SW 会单独收到 error push, ActiveMsgRuntime 处理.
-    emitToolStatus(item.charId, 'done', `${toolLabel}完成了，正在等角色的回复推回来。`, item.sessionId);
+
     return true;
   } catch (e) {
-    console.error('[instant-tool-runner] /continue fetch threw', e);
+    console.error('[instant-tool-runner] /continue consumeInstantStream threw', e);
     emitToolStatus(item.charId, 'failed', `${toolLabel}完成了，但续写请求没有发出去。`, item.sessionId);
     return false;
   }

@@ -19,9 +19,6 @@ import {
 } from '../utils/instantPushClient';
 import { INSTANT_WORKER_VERSION } from '../utils/instantWorkerVersion';
 
-// 兼容旧调用方: 仍然导出 WORKER_BUILD_VERSION, 内部指向单一来源常量。
-export const WORKER_BUILD_VERSION = INSTANT_WORKER_VERSION;
-
 // 记录用户「已确认过的 worker 版本号」。
 const WORKER_UPDATE_SEEN_KEY = 'sullyos_worker_build_seen';
 

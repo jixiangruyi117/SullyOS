@@ -1,18 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowsClockwise, ClipboardText, Wrench, X } from '@phosphor-icons/react';
+import { ArrowsClockwise, ClipboardText, DownloadSimple, Wrench, X } from '@phosphor-icons/react';
 import {
     DEFAULT_DEV_DEBUG_FLAGS,
-    formatDevDebugLlmLog,
+    DEV_DEBUG_CAPTURE_CATEGORIES,
+    formatDevDebugLog,
     isDevDebugAvailable,
     readDevDebugFlags,
-    readDevDebugLlmLog,
+    readDevDebugLog,
     readDevDebugPosition,
-    subscribeDevDebugLlmLog,
+    subscribeDevDebugLog,
     subscribeDevDebugFlags,
     writeDevDebugFlags,
     writeDevDebugPosition,
 } from '../utils/devDebug';
-import type { DevDebugFlags, DevDebugFloatingPosition } from '../utils/devDebug';
+import type { DevDebugCaptureCategory, DevDebugFlags, DevDebugFloatingPosition } from '../utils/devDebug';
 
 const FLOATING_BUTTON_SIZE = 44;
 const FLOATING_SAFE_MARGIN = 16;
@@ -96,7 +97,7 @@ const ToggleRow: React.FC<{
 const DevDebugPanel: React.FC = () => {
     const [open, setOpen] = useState(false);
     const [flags, setFlags] = useState<DevDebugFlags>(() => readDevDebugFlags());
-    const [llmLogCount, setLlmLogCount] = useState(() => readDevDebugLlmLog().length);
+    const [logCount, setLogCount] = useState(() => readDevDebugLog().length);
     const [copied, setCopied] = useState(false);
     const [floatingPosition, setFloatingPosition] = useState<DevDebugFloatingPosition>(getInitialFloatingPosition);
     const dragStateRef = useRef<{
@@ -109,7 +110,7 @@ const DevDebugPanel: React.FC = () => {
     const suppressClickRef = useRef(false);
 
     useEffect(() => subscribeDevDebugFlags(setFlags), []);
-    useEffect(() => subscribeDevDebugLlmLog((entries) => setLlmLogCount(entries.length)), []);
+    useEffect(() => subscribeDevDebugLog((entries) => setLogCount(entries.length)), []);
     useEffect(() => {
         const clampAndPersist = () => {
             setFloatingPosition((current) => clampFloatingPosition(current));
@@ -124,19 +125,45 @@ const DevDebugPanel: React.FC = () => {
         };
     }, []);
 
-    const activeCount = useMemo(() => Object.values(flags).filter(Boolean).length, [flags]);
+    const activeCount = useMemo(
+        () => (flags.skipPromptBuild ? 1 : 0)
+            + (flags.skipEmotionEval ? 1 : 0)
+            + flags.captureLogs.length
+            + (flags.exposeLogDetail ? 1 : 0),
+        [flags],
+    );
     const updateFlag = <K extends keyof DevDebugFlags,>(key: K, value: DevDebugFlags[K]) => {
         setFlags(writeDevDebugFlags({ ...flags, [key]: value }));
+    };
+    const toggleCapture = (category: DevDebugCaptureCategory, checked: boolean) => {
+        const captureLogs = checked
+            ? [...flags.captureLogs, category]
+            : flags.captureLogs.filter((item) => item !== category);
+        setFlags(writeDevDebugFlags({ ...flags, captureLogs }));
     };
     const resetFlags = () => {
         setFlags(writeDevDebugFlags(DEFAULT_DEV_DEBUG_FLAGS));
     };
-    const copyLlmLog = async () => {
-        const text = formatDevDebugLlmLog();
+    const copyLog = async () => {
+        const text = formatDevDebugLog();
         if (!text) return;
         await navigator.clipboard.writeText(text);
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1200);
+    };
+    const downloadLog = () => {
+        const text = formatDevDebugLog();
+        if (!text) return;
+        const blob = new Blob([text], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        anchor.href = url;
+        anchor.download = `devdebug-log-${__BUILD_BRANCH__}-${stamp}.json`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
     };
     const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
         if (open || (event.pointerType === 'mouse' && event.button !== 0)) return;
@@ -275,26 +302,52 @@ const DevDebugPanel: React.FC = () => {
                             checked={flags.skipEmotionEval}
                             onChange={(checked) => updateFlag('skipEmotionEval', checked)}
                         />
+                        {DEV_DEBUG_CAPTURE_CATEGORIES.map((category) => (
+                            <React.Fragment key={category.key}>
+                                <div className="h-px bg-white/10" />
+                                <ToggleRow
+                                    title={category.title}
+                                    detail={category.detail}
+                                    checked={flags.captureLogs.includes(category.key)}
+                                    onChange={(checked) => toggleCapture(category.key, checked)}
+                                />
+                            </React.Fragment>
+                        ))}
                         <div className="h-px bg-white/10" />
                         <ToggleRow
-                            title="记录 LLM 日志"
-                            detail="记录请求和 raw response，关闭后清空。"
-                            checked={flags.captureLlmLog}
-                            onChange={(checked) => updateFlag('captureLlmLog', checked)}
+                            title="记录完整内容"
+                            detail="默认只存折叠的长文本（省空间 / 隐私）。需要原文就在复现前打开，之后抓的才存完整。"
+                            checked={flags.exposeLogDetail}
+                            onChange={(checked) => updateFlag('exposeLogDetail', checked)}
                         />
-                        <button
-                            type="button"
-                            onClick={copyLlmLog}
-                            disabled={llmLogCount === 0}
-                            className={`mb-3 flex h-8 w-full items-center justify-center gap-1.5 rounded-full px-3 text-[11px] font-bold transition-colors ${
-                                llmLogCount > 0
-                                    ? 'bg-white/10 text-white/75 active:scale-95'
-                                    : 'bg-white/5 text-white/25'
-                            }`}
-                        >
-                            <ClipboardText size={13} weight="bold" />
-                            {copied ? '已复制' : llmLogCount > 0 ? `复制日志 (${llmLogCount})` : '暂无日志'}
-                        </button>
+                        <div className="mb-3 mt-1 flex gap-2">
+                            <button
+                                type="button"
+                                onClick={copyLog}
+                                disabled={logCount === 0}
+                                className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full px-3 text-[11px] font-bold transition-colors ${
+                                    logCount > 0
+                                        ? 'bg-white/10 text-white/75 active:scale-95'
+                                        : 'bg-white/5 text-white/25'
+                                }`}
+                            >
+                                <ClipboardText size={13} weight="bold" />
+                                {copied ? '已复制' : logCount > 0 ? `复制 (${logCount})` : '暂无日志'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={downloadLog}
+                                disabled={logCount === 0}
+                                className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-full px-3 text-[11px] font-bold transition-colors ${
+                                    logCount > 0
+                                        ? 'bg-white/10 text-white/75 active:scale-95'
+                                        : 'bg-white/5 text-white/25'
+                                }`}
+                            >
+                                <DownloadSimple size={13} weight="bold" />
+                                下载
+                            </button>
+                        </div>
                     </div>
 
                     <div className="flex items-center justify-between gap-3 border-t border-white/10 px-4 py-3">

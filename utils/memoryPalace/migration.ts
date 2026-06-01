@@ -596,9 +596,15 @@ function buildLogSnippets(sortedLogs: MemoryFragment[]): string[] {
     for (const log of sortedLogs) {
         const summary = (log.summary || '').trim();
         if (!summary) continue;
-        // 按中英文句末标点、换行切分；保留标点让语义完整
+        // 按中英文句末标点、换行切分；保留标点让语义完整。
+        // 不用后行断言 (?<=…): iOS Safari <16.4 的 JSC 不支持, 旧设备 new RegExp 会抛
+        // "invalid group specifier name". 改成「句末标点后插哨兵(标点留前句) + 换行换哨兵」再 split,
+        // 与原 (?<=[标点])\s*|\n+ 字节等价 (见 utils/lookbehindFree.test.ts)。
+        const SPLIT = String.fromCharCode(1);
         const parts = summary
-            .split(/(?<=[。！？!?])\s*|\n+/)
+            .replace(/([。！？!?])\s*/g, `$1${SPLIT}`)
+            .replace(/\n+/g, SPLIT)
+            .split(SPLIT)
             .map(s => s.trim())
             .filter(Boolean);
         for (const p of parts) {

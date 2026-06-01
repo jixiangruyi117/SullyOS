@@ -463,7 +463,8 @@ const DateSession: React.FC<DateSessionProps> = ({
                 processNextDialogue(items[0], items.slice(1));
             }
         } catch (e: any) {
-            setCurrentText("(连接中断)");
+            // onSendMessage 内部含 API 调用 + 回复后处理, 抛错不一定是网络。用中性文案, 不误导成"连接中断"。
+            setCurrentText(`(出错了: ${e?.message || '未知错误'})`);
             setShowInputBox(true);
         } finally {
             setIsTyping(false);
