@@ -33,6 +33,18 @@ export const markWorkerBuildSeen = (): void => {
 };
 
 /**
+ * 读用户上次确认部署过的 worker 版本号 (`YYYY-MM-DD` 字符串)，没有记录则返回 null。
+ * 设置面板用它判断「你部署的是不是最新版」, 不再去 ping worker。
+ */
+export const getWorkerBuildSeen = (): string | null => {
+  try {
+    return localStorage.getItem(WORKER_UPDATE_SEEN_KEY);
+  } catch {
+    return null;
+  }
+};
+
+/**
  * 是否要弹「worker 有更新」提醒：
  *  - 只对启用了 Instant Push 的用户弹
  *  - 已确认版本与当前内置版本不一致才弹 (null 也算不一致 —— 老用户首次铺该功能时提醒一次)

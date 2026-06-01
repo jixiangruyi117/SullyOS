@@ -322,13 +322,6 @@ export interface InstantWorkerCapabilityResult {
   raw?: unknown;
 }
 
-export interface InstantWorkerVersionResult {
-  ok: boolean;
-  error?: string;
-  /** Worker self-reported INSTANT_WORKER_VERSION (YYYY-MM-DD). */
-  version?: string;
-}
-
 // ── localStorage helpers ───────────────────────────────────────────────────
 
 const DEFAULT_CONFIG: InstantPushConfig = {
@@ -430,32 +423,6 @@ export async function probeInstantWorkerCapabilities(
       multipartAvailable: data.multipart?.available !== false,
       raw: data,
     };
-  } catch (e) {
-    const err = e as { message?: string } | null;
-    return { ok: false, error: err?.message ?? String(e) };
-  }
-}
-
-export async function probeInstantWorkerVersion(
-  cfg: InstantPushConfig = loadInstantConfig(),
-): Promise<InstantWorkerVersionResult> {
-  const workerUrl = normalizeWorkerUrl(cfg.workerUrl || '');
-  if (!workerUrl.startsWith('https://')) {
-    return { ok: false, error: 'Worker URL 未配置或不是 https' };
-  }
-  try {
-    const res = await fetch(`${workerUrl}/version`, { method: 'GET' });
-    const { text, parsed } = await resolveSafeFetchText(res);
-    if (!res.ok) {
-      return { ok: false, error: parsed?.error?.message ?? `HTTP ${res.status}` };
-    }
-    const version = parsed?.data?.version;
-    if (typeof version !== 'string' || !version) {
-      // 旧版 worker 没有 /version 路由,Cloudflare 通常返 404 然后被前面 !res.ok 捕获;
-      // 这里兜底处理 200 但格式不对的情况 (理论上不会发生)。
-      return { ok: false, error: 'Worker 未返回版本号 (可能是旧版部署)', raw: text } as any;
-    }
-    return { ok: true, version };
   } catch (e) {
     const err = e as { message?: string } | null;
     return { ok: false, error: err?.message ?? String(e) };
