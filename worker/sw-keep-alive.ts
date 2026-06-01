@@ -41,8 +41,16 @@ import { installReiSW } from '@rei-standard/amsg-sw';
  *           "content 抢先于 reasoning 落库" 的竞态下把思维链回填到已存的首条回复上，
  *           修复 instant 模式弱网/移动端思维链(心象)间歇丢失。
  *  - 1.10.1: 合并 1.10.0 思维链回填修复与 ReiStandard amsg-sw 2.1.1 升级。
+ *  - 1.11.0: 加 process-sse-payload message 协议，SSE 直达 payload 也复用同一套
+ *           ActiveMsg inbox / tool / emotion 路由。
+ *  - 1.12.0: SSE 直达 payload 经 MessageChannel 回 ack，前台据此确认 SW 是否
+ *           收下（含去重命中）。
+ *  - 1.13.0: 接入 amsg-sw 通用 REI_AMSG_DELIVER + delivery dedupe。SSE bridge
+ *           和 WebPush backup 统一在包层 showNotification 前去重。
+ *  - 1.14.0: 升级 amsg-sw dedupe 语义：去重记录区分业务处理与通知展示，
+ *           SSE-first 且前台未展示通知时，WebPush backup 可在隐藏态只补通知。
  */
-const SW_VERSION = '1.10.1';
+const SW_VERSION = '1.14.0';
 
 const PING_INTERVAL = 15_000;
 const MAX_MANUAL_ALIVE_MS = 5 * 60_000;
