@@ -12,7 +12,7 @@ import { VRScheduler } from '../utils/vrWorld/scheduler';
 import { VR_ROOMS, getRoom, VR_DEFAULT_INTERVAL_MIN } from '../utils/vrWorld/constants';
 import { buildNovelAsync, groupAnnotationsBySeg, getBookmark } from '../utils/vrWorld/novel';
 import { decodeTextFile } from '../utils/vrWorld/decodeText';
-import { PostOffice, MAX_LETTER_CHARS, type RemoteReply } from '../utils/vrWorld/postOffice';
+import { PostOffice, MAX_LETTER_CHARS, exportIdentity, importIdentity, type RemoteReply, type RemoteLetterStat } from '../utils/vrWorld/postOffice';
 import { getVRApi, setVRApi, getVRApiLog, clearVRApiLog, type VRApiCall } from '../utils/vrWorld/vrApi';
 import { safeResponseJson } from '../utils/safeApi';
 
@@ -583,20 +583,50 @@ const PendingLetterRow: React.FC<{ l: VRLetter; onMenu: (l: VRLetter) => void }>
 };
 
 // 信件编辑弹窗
-const LetterEditModal: React.FC<{ letter: VRLetter; onSave: (pen: string, content: string) => void; onCancel: () => void }> = ({ letter, onSave, onCancel }) => {
+const LetterEditModal: React.FC<{ letter: VRLetter; onSave: (pen: string, content: string) => void; onCancel: () => void; title?: string }> = ({ letter, onSave, onCancel, title = '编辑这封信' }) => {
     const [pen, setPen] = useState(letter.pen);
     const [content, setContent] = useState(letter.content);
     return (
         <div className="fixed inset-0 z-[300] flex items-center justify-center px-6 bg-black/55 backdrop-blur-sm" onClick={onCancel}>
             <div className="w-full max-w-[340px] rounded-2xl p-4" onClick={e => e.stopPropagation()} style={{ background: 'linear-gradient(180deg,#221b12,#15100a)', border: '1px solid rgba(220,190,120,.28)', boxShadow: '0 16px 50px rgba(0,0,0,.6)' }}>
-                <div className="text-[13px] font-semibold text-amber-100 mb-2.5" style={{ fontFamily: `'Noto Serif SC',serif` }}>编辑这封信</div>
+                <div className="text-[13px] font-semibold text-amber-100 mb-2.5" style={{ fontFamily: `'Noto Serif SC',serif` }}>{title}</div>
                 <label className="text-[10px] text-amber-200/60">笔名</label>
                 <input value={pen} onChange={e => setPen(e.target.value)} className="w-full mt-1 mb-2.5 rounded-lg bg-black/25 px-3 py-2 text-[12.5px] text-amber-50 outline-none" style={{ border: '1px solid rgba(220,190,120,.2)' }} />
                 <label className="text-[10px] text-amber-200/60 flex items-center">正文<span className={`ml-auto ${charLen(content) > MAX_LETTER_CHARS ? 'text-red-300 font-semibold' : 'text-amber-200/50'}`}>{charLen(content)}/{MAX_LETTER_CHARS}</span></label>
-                <textarea value={content} onChange={e => setContent(e.target.value)} rows={5} className="w-full mt-1 rounded-lg bg-black/25 px-3 py-2 text-[12.5px] text-amber-50 outline-none resize-none vr-reader-scroll" style={{ border: `1px solid ${charLen(content) > MAX_LETTER_CHARS ? 'rgba(244,120,90,.5)' : 'rgba(220,190,120,.2)'}` }} />
+                <textarea value={content} onChange={e => setContent(e.target.value)} rows={5} placeholder="写给陌生人的话——碎碎念、日记、困惑、执念都行…" className="w-full mt-1 rounded-lg bg-black/25 px-3 py-2 text-[12.5px] text-amber-50 placeholder-white/25 outline-none resize-none vr-reader-scroll" style={{ border: `1px solid ${charLen(content) > MAX_LETTER_CHARS ? 'rgba(244,120,90,.5)' : 'rgba(220,190,120,.2)'}` }} />
                 <div className="flex gap-2 mt-3.5">
                     <button onClick={onCancel} className="flex-1 rounded-full py-2 text-[12.5px] text-white/70" style={{ border: '1px solid rgba(255,255,255,.16)' }}>取消</button>
                     <button onClick={() => onSave(pen, content)} disabled={!content.trim() || charLen(content) > MAX_LETTER_CHARS} className="flex-1 rounded-full py-2 text-[12.5px] font-semibold text-black disabled:opacity-40" style={{ background: 'linear-gradient(120deg,#f3d08a,#e8b75e)' }}>保存</button>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// 身份导出 / 导入弹窗：owner_id 是本地随机 UUID，换设备/清数据会丢失「我寄出的信」的归属，
+// 这里给用户一个「带走身份」的口子。
+const IdentityModal: React.FC<{ onImport: (code: string) => void; onClose: () => void }> = ({ onImport, onClose }) => {
+    const code = exportIdentity();
+    const [input, setInput] = useState('');
+    const [copied, setCopied] = useState(false);
+    const copy = async () => {
+        try { await navigator.clipboard?.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* ignore */ }
+    };
+    return (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center px-6 bg-black/55 backdrop-blur-sm" onClick={onClose}>
+            <div className="w-full max-w-[340px] rounded-2xl p-4" onClick={e => e.stopPropagation()} style={{ background: 'linear-gradient(180deg,#221b12,#15100a)', border: '1px solid rgba(220,190,120,.28)', boxShadow: '0 16px 50px rgba(0,0,0,.6)' }}>
+                <div className="text-[13px] font-semibold text-amber-100 mb-1" style={{ fontFamily: `'Noto Serif SC',serif` }}>邮局身份</div>
+                <p className="text-[10px] text-white/45 leading-snug mb-2.5">这串「身份码」代表你在邮局的匿名身份。复制保存，换设备或清数据后导入，就能找回「我寄出的信」和它们的归属。</p>
+                <label className="text-[10px] text-amber-200/60">我的身份码</label>
+                <div className="flex gap-1.5 mt-1 mb-3">
+                    <div className="flex-1 rounded-lg bg-black/30 px-2.5 py-2 text-[10.5px] text-amber-50/80 break-all leading-snug" style={{ border: '1px solid rgba(220,190,120,.2)' }}>{code}</div>
+                    <button onClick={copy} className="shrink-0 self-stretch px-3 rounded-lg text-[11px] font-semibold text-black" style={{ background: 'linear-gradient(120deg,#f3d08a,#e8b75e)' }}>{copied ? '已复制' : '复制'}</button>
+                </div>
+                <label className="text-[10px] text-amber-200/60">导入身份码（换回旧身份）</label>
+                <input value={input} onChange={e => setInput(e.target.value)} placeholder="粘贴 sullypo.… 身份码" className="w-full mt-1 rounded-lg bg-black/25 px-3 py-2 text-[11.5px] text-amber-50 placeholder-white/25 outline-none" style={{ border: '1px solid rgba(220,190,120,.2)' }} />
+                <div className="flex gap-2 mt-3.5">
+                    <button onClick={onClose} className="flex-1 rounded-full py-2 text-[12.5px] text-white/70" style={{ border: '1px solid rgba(255,255,255,.16)' }}>关闭</button>
+                    <button onClick={() => onImport(input)} disabled={!input.trim()} className="flex-1 rounded-full py-2 text-[12.5px] font-semibold text-black disabled:opacity-40" style={{ background: 'linear-gradient(120deg,#f3d08a,#e8b75e)' }}>导入</button>
                 </div>
             </div>
         </div>
@@ -688,13 +718,20 @@ const LetterSection: React.FC<{ title: string; count: number; tone?: keyof typeo
 };
 
 // 来信行（长按弹出：指定角色回 / 亲自回 / 删除）
-const InboxLetterRow: React.FC<{ l: VRLetter; onMenu: (l: VRLetter) => void }> = ({ l, onMenu }) => {
+const InboxLetterRow: React.FC<{ l: VRLetter; onMenu: (l: VRLetter) => void; onLike: (l: VRLetter) => void; onDislike: (l: VRLetter) => void }> = ({ l, onMenu, onLike, onDislike }) => {
     const { pressing, handlers } = useLongPress(() => onMenu(l), 500);
+    const stop = (e: React.SyntheticEvent) => e.stopPropagation();
     return (
         <div {...handlers} className={`rounded-lg p-2 mb-1.5 text-[11px] text-white/80 leading-snug transition-transform ${pressing ? 'scale-[0.97]' : ''}`}
             style={{ background: pressing ? 'rgba(125,211,252,0.16)' : 'rgba(255,255,255,.04)', border: `1px solid ${pressing ? 'rgba(125,211,252,0.4)' : 'transparent'}` }}>
-            <div className="flex items-center gap-1.5 mb-0.5"><span className="text-sky-200/80 font-bold text-[10.5px]">{l.pen}</span><span className="ml-auto text-white/25 text-[9px]">长按回信</span></div>
+            <div className="flex items-center gap-1.5 mb-0.5"><span className="text-sky-200/80 font-bold text-[10.5px]">{l.pen}</span></div>
             <ExpandText text={l.content} limit={90} />
+            <div className="flex items-center gap-2.5 mt-1.5 text-[10px]">
+                <span className="text-white/30">👁 {l.views ?? 0}</span>
+                <button onPointerDown={stop} onClick={e => { stop(e); onLike(l); }} className={`transition-colors ${l.myVote === 1 ? 'text-amber-300 font-semibold' : 'text-white/40'}`}>👍 {l.likes ?? 0}</button>
+                <button onPointerDown={stop} onClick={e => { stop(e); onDislike(l); }} className={`transition-colors ${l.myVote === -1 ? 'text-red-300 font-semibold' : 'text-white/40'}`} title="踩 = 举报">👎 {l.dislikes ?? 0}</button>
+                <span className="ml-auto text-white/25 text-[9px]">长按回信</span>
+            </div>
         </div>
     );
 };
@@ -894,15 +931,27 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
     const [inboxMenu, setInboxMenu] = useState<VRLetter | null>(null);   // 来信长按菜单
     const [assignFor, setAssignFor] = useState<VRLetter | null>(null);   // 指定角色回信的选人面板
     const [replyFor, setReplyFor] = useState<VRLetter | null>(null);     // 亲自回信编辑器
+    const [confirmReport, setConfirmReport] = useState<VRLetter | null>(null); // 点踩=举报二次确认
+    const [identityOpen, setIdentityOpen] = useState(false);            // 身份导出/导入弹窗
+    const [composeNew, setComposeNew] = useState<VRLetter | null>(null); // 用户自己写新信的草稿
+    const [myStats, setMyStats] = useState<Record<string, RemoteLetterStat>>({}); // 我寄出的信热度（按 remoteId）
     const enabledChars = characters.filter(c => c.vrState?.enabled);
 
     const load = useCallback(async () => setLetters(await DB.getVRLetters()), []);
+    const loadStats = useCallback(async () => {
+        try {
+            const stats = await PostOffice.fetchMyStats();
+            const map: Record<string, RemoteLetterStat> = {};
+            stats.forEach(s => { map[s.id] = s; });
+            setMyStats(map);
+        } catch { /* 离线/失败不影响其它功能 */ }
+    }, []);
     useEffect(() => {
-        void load();
-        const h = () => { void load(); };
+        void load(); void loadStats();
+        const h = () => { void load(); void loadStats(); };
         window.addEventListener('vr-session-done', h);
         return () => window.removeEventListener('vr-session-done', h);
-    }, [load]);
+    }, [load, loadStats]);
 
     const outQueued = letters.filter(l => l.box === 'outbox' && l.status === 'queued');
     const replyQueued = letters.filter(l => l.box === 'inbox' && l.replyStatus === 'queued' && l.reply);
@@ -941,7 +990,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
         setBusy('inbox');
         try {
             const remote = await PostOffice.fetchInbox(5);
-            const fresh: VRLetter[] = remote.map(r => ({ id: genLocalId('lt'), box: 'inbox', pen: r.pen, content: r.content, createdAt: r.created_at, remoteLetterId: r.id, replyStatus: 'none', fetchedAt: Date.now() }));
+            const fresh: VRLetter[] = remote.map(r => ({ id: genLocalId('lt'), box: 'inbox', pen: r.pen, content: r.content, createdAt: r.created_at, remoteLetterId: r.id, replyStatus: 'none', fetchedAt: Date.now(), likes: r.likes ?? 0, dislikes: r.dislikes ?? 0, views: r.views ?? 0, myVote: 0 }));
             await DB.saveVRLetters(fresh);
             await load(); addToast?.(remote.length ? `收到 ${remote.length} 封陌生来信` : '暂时没有新的来信', 'info');
         } catch (e: any) { addToast?.('刷新失败：' + (e?.message || '检查网络'), 'error'); } finally { setBusy(null); }
@@ -960,6 +1009,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
     };
     const collectReplies = async () => {
         setBusy('collect');
+        void loadStats();   // 顺手刷新「我寄出的信」赞/踩/浏览/回信数
         try {
             const replies = await PostOffice.fetchReplies();
             if (replies.length === 0) { addToast?.('还没有人回你的信', 'info'); setBusy(null); return; }
@@ -1017,6 +1067,40 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
         addToast?.('回信已写好，去「待发送的回信」一键发送', 'success');
     };
 
+    // 投票：点赞(1)/点踩=举报(-1)/撤销(0)。踩满阈值后端会删信 → 本地移除
+    const doVote = async (l: VRLetter, vote: 1 | -1 | 0) => {
+        if (!l.remoteLetterId) return;
+        try {
+            const r = await PostOffice.vote(l.remoteLetterId, vote);
+            if (r.deleted) { await DB.deleteVRLetter(l.id); await load(); addToast?.('这封信被举报够数，已移除', 'info'); return; }
+            await DB.saveVRLetter({ ...l, likes: r.likes, dislikes: r.dislikes, myVote: vote }); await load();
+        } catch (e: any) { addToast?.('操作失败：' + (e?.message || '检查网络'), 'error'); }
+    };
+    const onLike = (l: VRLetter) => void doVote(l, l.myVote === 1 ? 0 : 1);
+    const onDislike = (l: VRLetter) => { if (l.myVote === -1) void doVote(l, 0); else setConfirmReport(l); };
+
+    // 用户自己从零写一封新漂流信 → 落「待寄出」队列
+    const startCompose = () => setComposeNew({ id: genLocalId('lt'), box: 'outbox', pen: userName, content: '', createdAt: Date.now(), status: 'queued', charId: 'user' });
+    const saveNewLetter = async (pen: string, content: string) => {
+        if (!composeNew) return;
+        await DB.saveVRLetter({ ...composeNew, pen: pen.trim() || userName, content: content.trim() });
+        setComposeNew(null); await load();
+        addToast?.('写好了，去「待寄出」一键寄出', 'success');
+    };
+
+    // 导入身份码
+    const doImport = (code: string) => {
+        if (importIdentity(code)) { addToast?.('身份已导入', 'success'); setIdentityOpen(false); void load(); void loadStats(); }
+        else addToast?.('身份码无效（格式或校验位不对）', 'error');
+    };
+
+    // 「我寄出的信」的热度行（赞/踩/浏览/回信）；没数据就不显示
+    const statLine = (remoteId?: string) => {
+        const s = remoteId ? myStats[remoteId] : undefined;
+        if (!s) return null;
+        return <div className="text-[9.5px] text-white/35 mt-1">👍 {s.likes}　👎 {s.dislikes}　👁 {s.views}　✉ {s.reply_count}</div>;
+    };
+
     return (
         <div className="absolute top-14 left-3 right-3 bottom-3 z-20 rounded-2xl overflow-hidden flex flex-col backdrop-blur-md"
             style={{ background: 'rgba(30,24,14,0.66)', border: '1px solid rgba(220,190,120,0.25)', boxShadow: '0 8px 26px rgba(0,0,0,.45)' }}>
@@ -1025,18 +1109,20 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
                 <span className="text-[11px] tracking-[0.2em] text-amber-100/80 mr-auto" style={{ fontFamily: `'Noto Serif SC',serif` }}>邮局</span>
                 <button onClick={refreshInbox} disabled={!!busy} className="text-[10.5px] px-2.5 py-1 rounded-full bg-white/8 text-amber-100/90 disabled:opacity-40">{busy === 'inbox' ? '…' : '刷新收件箱'}</button>
                 <button onClick={collectReplies} disabled={!!busy} className="text-[10.5px] px-2.5 py-1 rounded-full bg-white/8 text-amber-100/90 disabled:opacity-40">{busy === 'collect' ? '…' : '收取回复'}</button>
+                <button onClick={() => setIdentityOpen(true)} title="邮局身份导出/导入" className="text-[12px] px-2 py-1 rounded-full bg-white/8 text-amber-100/90">⚙</button>
             </div>
 
             <div className="flex-1 overflow-y-auto vr-reader-scroll px-3 py-2.5">
                 {/* 待寄出 */}
                 <LetterSection title="待寄出" count={outQueued.length} tone="amber" badge={outQueued.length ? '等你寄出' : undefined}>
-                    {outQueued.length === 0 ? <p className="text-[10.5px] text-white/35">角色在邮局写的漂流信会排在这里，你确认后一键寄出。寄出时笔名会自动匿名。</p> : (
+                    {outQueued.length === 0 ? <p className="text-[10.5px] text-white/35">角色在邮局写的漂流信会排在这里，你确认后一键寄出。也可以自己写一封。寄出时笔名会自动匿名。</p> : (
                         <>
                             <PagedList items={outQueued} perPage={4} render={l => <PendingLetterRow key={l.id} l={l} onMenu={setMenuFor} />} />
                             <div className="text-[9.5px] text-white/35 text-right mb-1">今日已寄 {readSendQuota().count}/{PO_DAILY_LIMIT}</div>
                             <button onClick={sendOutbox} disabled={!!busy} className="w-full mt-1 rounded-full py-2 text-[12px] font-semibold text-black disabled:opacity-40" style={{ background: 'linear-gradient(120deg,#f3d08a,#e8b75e)' }}>{busy === 'send' ? '寄出中…' : `一键寄出（${outQueued.length}）`}</button>
                         </>
                     )}
+                    <button onClick={startCompose} className="w-full mt-1.5 rounded-full py-1.5 text-[11px] text-amber-100/90" style={{ border: '1px solid rgba(220,190,120,.3)' }}>✍️ 自己写一封新漂流信</button>
                 </LetterSection>
 
                 {/* 待发送的回信 */}
@@ -1058,7 +1144,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
                 {inboxWaiting.length > 0 && (
                     <LetterSection title="收件箱" count={inboxWaiting.length} tone="sky" badge="等角色回信">
                         <p className="text-[9.5px] text-white/35 mb-1.5 leading-snug">陌生人寄来的信。等角色逛到邮局会自己回，也可以<b className="text-sky-200/80">长按某封信</b>，指定角色去回、或你亲自回。</p>
-                        <PagedList items={inboxWaiting} perPage={5} render={l => <InboxLetterRow key={l.id} l={l} onMenu={setInboxMenu} />} />
+                        <PagedList items={inboxWaiting} perPage={5} render={l => <InboxLetterRow key={l.id} l={l} onMenu={setInboxMenu} onLike={onLike} onDislike={onDislike} />} />
                     </LetterSection>
                 )}
 
@@ -1068,6 +1154,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
                         <PagedList items={sentAwaiting} perPage={5} render={l => (
                             <div key={l.id} className="rounded-lg p-2 mb-1.5 text-[11px]" style={{ background: 'rgba(255,255,255,.04)' }}>
                                 <div className="text-white/70 leading-snug"><ExpandText text={l.content} limit={70} /></div>
+                                {statLine(l.remoteId)}
                             </div>
                         )} />
                     </LetterSection>
@@ -1083,6 +1170,7 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
                                     {l.status === 'sealed' && <span className="text-[8px] text-amber-200/60 border border-amber-300/30 rounded-full px-1.5 leading-tight">已封存</span>}
                                 </div>
                                 <div className="text-amber-50/80 leading-snug mb-1"><ExpandText text={l.content} limit={70} /></div>
+                                {statLine(l.remoteId)}
                                 {(l.repliesReceived || []).map((r, i) => (
                                     <div key={i} className="text-[11px] text-amber-100/85 pl-2 border-l-2 border-amber-300/40 leading-snug mt-1"><span className="font-bold">{r.pen}</span> 回：<ExpandText text={r.content} limit={120} /></div>
                                 ))}
@@ -1117,6 +1205,15 @@ const PostOfficePanel: React.FC<{ addToast?: (m: string, t?: any) => void; chara
                 actions={enabledChars.map(c => ({ label: c.name, onClick: () => assignReply(c.id) }))}
                 onClose={() => setAssignFor(null)} />
             {replyFor && <ReplyComposeModal letter={replyFor} defaultPen={userName} onSave={saveManualReply} onCancel={() => setReplyFor(null)} />}
+
+            {/* 投票=举报 二次确认 */}
+            <ConfirmDialog open={!!confirmReport} title="点踩 = 举报这封信？" confirmText="确认举报"
+                message="踩等于举报。一封信被 5 个不同设备举报会被自动删除，不可恢复。"
+                onConfirm={() => { if (confirmReport) void doVote(confirmReport, -1); setConfirmReport(null); }} onCancel={() => setConfirmReport(null)} />
+            {/* 用户自己写新漂流信 */}
+            {composeNew && <LetterEditModal letter={composeNew} title="写一封新漂流信" onSave={saveNewLetter} onCancel={() => setComposeNew(null)} />}
+            {/* 身份导出/导入 */}
+            {identityOpen && <IdentityModal onImport={doImport} onClose={() => setIdentityOpen(false)} />}
         </div>
     );
 };
