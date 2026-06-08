@@ -476,6 +476,7 @@ const PhoneShell: React.FC = () => {
 
   const bgImageValue = getBgStyle(theme.wallpaper);
   const contentColor = theme.contentColor || '#ffffff';
+  const acnhSkin = theme.skin === 'animalcrossing'; // 动森彩蛋：锁屏换暖色草地点缀
 
   if (isLocked) {
     const unreadCount = Object.values(unreadMessages).reduce((a,b) => a+b, 0);
@@ -494,13 +495,33 @@ const PhoneShell: React.FC = () => {
         className="relative w-full h-full bg-cover bg-center cursor-pointer overflow-hidden group font-light select-none overscroll-none"
         style={{ backgroundImage: bgImageValue, color: contentColor }}
       >
-        <div className="absolute inset-0 bg-black/5 backdrop-blur-sm transition-all group-hover:backdrop-blur-none group-hover:bg-transparent duration-700" />
-        
+        {acnhSkin ? (
+            <div className="absolute inset-0 transition-all duration-700 group-hover:opacity-0"
+                 style={{ background: 'linear-gradient(180deg, rgba(188,231,245,0.25) 0%, rgba(255,247,176,0.15) 45%, rgba(124,186,76,0.28) 100%)' }} />
+        ) : (
+            <div className="absolute inset-0 bg-black/5 backdrop-blur-sm transition-all group-hover:backdrop-blur-none group-hover:bg-transparent duration-700" />
+        )}
+
+        {/* 动森彩蛋：锁屏飘叶 */}
+        {acnhSkin && (
+            <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                <svg viewBox="0 0 100 100" className="absolute w-14 h-14 opacity-80 -rotate-[25deg]" style={{ left: '10%', top: '12%' }}><path d="M50 8 C78 20 88 50 78 82 C74 92 60 96 50 92 C40 96 26 92 22 82 C12 50 22 20 50 8Z" fill="#9ED25F"/><path d="M50 14 L50 88" stroke="#5c8a30" strokeWidth="3" fill="none" opacity="0.5"/></svg>
+                <svg viewBox="0 0 100 100" className="absolute w-12 h-12 opacity-75 rotate-[30deg] scale-x-[-1]" style={{ right: '12%', top: '20%' }}><path d="M50 8 C78 20 88 50 78 82 C74 92 60 96 50 92 C40 96 26 92 22 82 C12 50 22 20 50 8Z" fill="#7CBA4C"/><path d="M50 14 L50 88" stroke="#4d7a2a" strokeWidth="3" fill="none" opacity="0.5"/></svg>
+                <svg viewBox="0 0 100 100" className="absolute w-16 h-16 opacity-70 rotate-[12deg]" style={{ left: '16%', bottom: '14%' }}><path d="M50 8 C78 20 88 50 78 82 C74 92 60 96 50 92 C40 96 26 92 22 82 C12 50 22 20 50 8Z" fill="#5FAE6E"/><path d="M50 14 L50 88" stroke="#356b3f" strokeWidth="3" fill="none" opacity="0.5"/></svg>
+            </div>
+        )}
+
         <div className="absolute top-24 w-full text-center drop-shadow-[0_2px_4px_rgba(0,0,0,0.3)]">
            <div className="text-8xl tracking-tighter opacity-95 font-bold">
              {virtualTime.hours.toString().padStart(2,'0')}<span className="animate-pulse">:</span>{virtualTime.minutes.toString().padStart(2,'0')}
            </div>
-           <div className="text-lg tracking-widest opacity-90 mt-2 uppercase text-xs font-bold">SullyOS Simulation</div>
+           {acnhSkin ? (
+               <div className="text-lg tracking-widest opacity-90 mt-2 text-xs font-bold flex items-center justify-center gap-1.5">
+                   <span>🍃</span><span>无人岛生活</span><span>🍃</span>
+               </div>
+           ) : (
+               <div className="text-lg tracking-widest opacity-90 mt-2 uppercase text-xs font-bold">SullyOS Simulation</div>
+           )}
         </div>
 
         {unreadCount > 0 && (

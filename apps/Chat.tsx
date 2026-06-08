@@ -1928,7 +1928,6 @@ const Chat: React.FC = () => {
     // Memoize ChatInputArea callbacks
     const handleSendCallback = useCallback(() => handleSendText(), [char, input, replyTarget]);
     const handleCharSelectCallback = useCallback((id: string) => { setActiveCharacterId(id); setShowPanel('none'); }, []);
-
     // 兜底：正常情况下 OSContext 启动时一定会保底一个角色，char 不该为空。
     // 但若 init 期间某个 store 读取失败（数据其实还在 IndexedDB 里），characters 可能暂时为空，
     // 此时下面 char.chatBackground 会直接抛 "undefined is not an object" 把整个 App 崩到错误页。
@@ -1944,6 +1943,8 @@ const Chat: React.FC = () => {
         );
     }
 
+    // 动森彩蛋模式（受「聊天联动」开关控制：关掉则聊天保持原样式）
+    const acnh = osTheme.skin === 'animalcrossing' && osTheme.acnhChatSync !== false;
     const chatChromeStyle = osTheme.chatChromeStyle || 'soft';
     const chatBackgroundStyle = osTheme.chatBackgroundStyle || 'plain';
     const chatRootClass =
@@ -1982,16 +1983,43 @@ const Chat: React.FC = () => {
               : {
                   backgroundImage: 'none',
                 };
+    // 动森彩蛋：浅奶油米黄中心（上下绿条由 header/输入栏负责），配色参考 Pocket Camp。
+    const acnhRootClass = 'flex flex-col h-full overflow-hidden relative font-sans transition-[background-color] duration-500';
+    const acnhRootStyle: React.CSSProperties = {
+        backgroundColor: '#F2E9CC',
+        backgroundImage: 'none',
+    };
+    const finalRootClass = acnh ? acnhRootClass : chatRootClass;
+    // 动森下强制覆盖角色自定义聊天背景，保证整机一致的彩蛋观感
+    const finalRootStyle = acnh ? acnhRootStyle : chatRootStyle;
     const chatAvatarSizeClass = osTheme.chatAvatarSize === 'small' ? 'w-7 h-7' : osTheme.chatAvatarSize === 'large' ? 'w-12 h-12' : 'w-9 h-9';
     const chatAvatarRadiusClass = osTheme.chatAvatarShape === 'square' ? 'rounded-sm' : osTheme.chatAvatarShape === 'rounded' ? 'rounded-xl' : 'rounded-full';
     const chatPendingAvatarClass = `${chatAvatarSizeClass} ${chatAvatarRadiusClass} object-cover`;
 
     return (
-        <div 
-            className={chatRootClass}
-            style={chatRootStyle}
+        <div
+            className={finalRootClass}
+            style={finalRootStyle}
         >
              {activeTheme.customCss && <style>{activeTheme.customCss}</style>}
+
+             {/* 动森彩蛋：作用域 CSS 覆盖气泡——奶油 AI 气泡 + 蜜桃用户气泡，暖棕文字，绕开 MessageItem 复杂逻辑 */}
+             {acnh && <style>{`
+                .sully-bubble-ai {
+                    background: #FBF4DE !important;
+                    color: #6b5a3e !important;
+                    border: 1.5px solid #efe6c8 !important;
+                    border-radius: 24px !important;
+                    box-shadow: 0 4px 10px -5px rgba(120,95,45,0.28) !important;
+                }
+                .sully-bubble-user {
+                    background: #F5C896 !important;
+                    color: #6b4a2f !important;
+                    border: 1.5px solid #eeb87f !important;
+                    border-radius: 24px !important;
+                    box-shadow: 0 4px 10px -5px rgba(150,100,55,0.32) !important;
+                }
+             `}</style>}
 
              {/* 记忆整理中 — 顶部浮动胶囊（不阻塞交互，轻量无 backdrop-filter） */}
              {memoryPalaceStatus && (
@@ -2243,6 +2271,7 @@ const Chat: React.FC = () => {
                 headerDensity={osTheme.chatHeaderDensity}
                 statusStyle={osTheme.chatStatusStyle}
                 chromeStyle={osTheme.chatChromeStyle}
+                acnh={acnh}
              />
 
             {/* 认知消化结果弹窗 — 全屏玻璃拟态 */}
@@ -2564,6 +2593,7 @@ const Chat: React.FC = () => {
                     inputStyle={osTheme.chatInputStyle}
                     sendButtonStyle={osTheme.chatSendButtonStyle}
                     chromeStyle={osTheme.chatChromeStyle}
+                    acnh={acnh}
                 />
             </div>
 
