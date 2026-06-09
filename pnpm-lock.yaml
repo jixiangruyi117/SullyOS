@@ -45,20 +45,20 @@ importers:
         specifier: ^2.1.10
         version: 2.1.10(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@rei-standard/amsg-client':
-        specifier: 2.5.0-next.0
-        version: 2.5.0-next.0
-      '@rei-standard/amsg-instant':
-        specifier: 0.9.1-next.0
-        version: 0.9.1-next.0
-      '@rei-standard/amsg-server':
         specifier: 2.5.0
-        version: 2.5.0(@neondatabase/serverless@1.1.0)(pg@8.21.0)
+        version: 2.5.0
+      '@rei-standard/amsg-instant':
+        specifier: 0.9.1
+        version: 0.9.1
+      '@rei-standard/amsg-server':
+        specifier: 2.5.1
+        version: 2.5.1(@neondatabase/serverless@1.1.0)(pg@8.21.0)
       '@rei-standard/amsg-shared':
         specifier: 0.2.0
         version: 0.2.0
       '@rei-standard/amsg-sw':
-        specifier: 2.3.0
-        version: 2.3.0
+        specifier: 2.3.1
+        version: 2.3.1
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -106,8 +106,8 @@ importers:
   worker/instant-push:
     dependencies:
       '@rei-standard/amsg-instant':
-        specifier: 0.9.1-next.0
-        version: 0.9.1-next.0
+        specifier: 0.9.1
+        version: 0.9.1
       '@rei-standard/amsg-shared':
         specifier: 0.2.0
         version: 0.2.0
@@ -848,16 +848,16 @@ packages:
       react: '>= 16.8'
       react-dom: '>= 16.8'
 
-  '@rei-standard/amsg-client@2.5.0-next.0':
-    resolution: {integrity: sha512-J8VExrRoX0fhRZ+jGCmgU/fTUtXrdwunadCMtLqTUEWiQvo1T1FKPnAHAfHsj+p2Oc5A3lUpTgGP0BR7Z45r7g==}
+  '@rei-standard/amsg-client@2.5.0':
+    resolution: {integrity: sha512-6h21fFG7nqPM9dMWWrpJEsR2TFcz/JsuorafVXmWKrVCtISnHUI17SGNKVqaf2WmkyxXBhfOtYC08MFXO3BArg==}
     engines: {node: '>=20'}
 
-  '@rei-standard/amsg-instant@0.9.1-next.0':
-    resolution: {integrity: sha512-u6MpGMkSR5mbwuA1pEH5WmIY1b2dvqPooWnSdozA9f/HuswiPjLOYUE4ZII8inLJsCJG6zzKjzBO1HqyzEPozg==}
+  '@rei-standard/amsg-instant@0.9.1':
+    resolution: {integrity: sha512-GsLzRvSXsp5cbJ/vNwQP+yHoZ4LJiilOvws0LemrzaFoG45ApQ7WW3YHux58DXdXOSN36prT5CsmipA3wUAmQQ==}
     engines: {node: '>=18'}
 
-  '@rei-standard/amsg-server@2.5.0':
-    resolution: {integrity: sha512-RJLcL/qIPYA6EU2hIEYPxySD5AGBL9hQlNNaxOLp7fHV5MGs+AnKnA13SZjX4Q/n/2G9E/P2D4aUPPSVZDVIQQ==}
+  '@rei-standard/amsg-server@2.5.1':
+    resolution: {integrity: sha512-8JGWuuNjuKwQHeYEvMPXt3VtVIKLSL49rVRTSftqPby+iTEdmzI0u4stIn//i71k+H3HlLYFqyD+EH8nBTaeUw==}
     engines: {node: '>=20'}
     peerDependencies:
       '@neondatabase/serverless': '>=0.9.0'
@@ -872,8 +872,8 @@ packages:
     resolution: {integrity: sha512-tAGoanWMEEGIadB47doerirymqHdpTKA81MRSHv13FRAJuDcsixtTu3iPFy1OIww6jPyUBCFloCm8LZ/f/fGeg==}
     engines: {node: '>=20'}
 
-  '@rei-standard/amsg-sw@2.3.0':
-    resolution: {integrity: sha512-2L7peDYidVBY/daQ+Nxtel+Nns8ILkkp9oh9Sfrd/DRbRFVXWNdFOd2NL9n/+X9NJ1gvMkxCG0eFullfiMFOKQ==}
+  '@rei-standard/amsg-sw@2.3.1':
+    resolution: {integrity: sha512-P1ZIxYfoAlg74+zVMM5uVpAv1j11UQ1jmPfR0zTz9kDbGVqacgZozUwu6nBZpcDZwNCMhaf4C6eTTVPCFxAooQ==}
     engines: {node: '>=20'}
 
   '@rolldown/pluginutils@1.0.0-beta.27':
@@ -2729,15 +2729,15 @@ snapshots:
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
 
-  '@rei-standard/amsg-client@2.5.0-next.0':
+  '@rei-standard/amsg-client@2.5.0':
     dependencies:
       '@rei-standard/amsg-shared': 0.2.0
 
-  '@rei-standard/amsg-instant@0.9.1-next.0':
+  '@rei-standard/amsg-instant@0.9.1':
     dependencies:
       '@rei-standard/amsg-shared': 0.2.0
 
-  '@rei-standard/amsg-server@2.5.0(@neondatabase/serverless@1.1.0)(pg@8.21.0)':
+  '@rei-standard/amsg-server@2.5.1(@neondatabase/serverless@1.1.0)(pg@8.21.0)':
     dependencies:
       '@netlify/blobs': 8.2.0
       '@rei-standard/amsg-shared': 0.2.0
@@ -2750,7 +2750,7 @@ snapshots:
 
   '@rei-standard/amsg-shared@0.2.0': {}
 
-  '@rei-standard/amsg-sw@2.3.0':
+  '@rei-standard/amsg-sw@2.3.1':
     dependencies:
       '@rei-standard/amsg-shared': 0.2.0
 
