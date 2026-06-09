@@ -370,7 +370,7 @@ const ChatInputArea: React.FC<ChatInputAreaProps> = ({
         {emojiSelectionMode && (
             <div className={`fixed inset-0 z-[-1] ${isPixelStyle ? 'bg-[#eadfce]/70 backdrop-blur-[2px]' : isDiscordStyle ? 'bg-slate-950/70 backdrop-blur-[2px]' : 'bg-white/60 backdrop-blur-[2px]'}`} />
         )}
-        <div className={`${shellClass} pb-safe shrink-0 z-40 relative`}>
+        <div className={`sully-chat-inputbar ${shellClass} pb-safe shrink-0 z-40 relative`}>
             
             {selectionMode ? (
                 <div className={`p-3 flex gap-2 ${isPixelStyle ? 'bg-[#f3e7d6]' : isDiscordStyle ? 'bg-slate-900/60 backdrop-blur-md' : 'bg-white/50 backdrop-blur-md'}`}>

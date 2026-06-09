@@ -2023,9 +2023,11 @@ const Chat: React.FC = () => {
 
     return (
         <div
-            className={finalRootClass}
+            className={`sully-chat-root ${finalRootClass}`}
             style={finalRootStyle}
         >
+             {/* 白框自定义 CSS：作用于 .sully-chat-header / .sully-chat-inputbar / .sully-chat-root，可换色/贴图/改外形。 */}
+             {osTheme.chatChromeCustomCss && <style>{osTheme.chatChromeCustomCss}</style>}
              {/* 角色「登场」过场：切换/进入时以 ta 的头像氛围铺底登场，再推进穿过进入聊天。key 切换即重放。 */}
              {showEntry && char && (
                <CharacterEntryTransition

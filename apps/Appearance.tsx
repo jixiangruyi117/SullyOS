@@ -118,6 +118,15 @@ const INPUT_STYLES: { value: 'default' | 'rounded' | 'flat'; label: string }[] =
     { value: 'rounded', label: '圆角' },
     { value: 'flat', label: '扁平' },
 ];
+// 白框自定义 CSS 快捷模板：点一下追加进编辑框。可换色 / 贴图 / 改圆角与不规则外形。
+const CHROME_CSS_PRESETS: { name: string; code: string }[] = [
+    { name: '毛玻璃头部', code: '.sully-chat-header{background:rgba(255,255,255,.45)!important;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px)}' },
+    { name: '渐变头部', code: '.sully-chat-header{background:linear-gradient(135deg,#ffd9ec,#d9c7ff)!important;border-bottom:none!important}' },
+    { name: '头部圆角下沿', code: '.sully-chat-header{border-bottom-left-radius:22px;border-bottom-right-radius:22px}' },
+    { name: '斜切外形', code: '.sully-chat-header{clip-path:polygon(0 0,100% 0,100% 82%,0 100%)}' },
+    { name: '头部贴图', code: '.sully-chat-header{background:url(在此粘贴图片直链) center/cover!important}' },
+    { name: '输入栏毛玻璃', code: '.sully-chat-inputbar{background:rgba(255,255,255,.45)!important;backdrop-filter:blur(22px)}' },
+];
 const TIMESTAMP_OPTIONS: { value: 'always' | 'hover' | 'never'; label: string }[] = [
     { value: 'always', label: '始终显示' },
     { value: 'hover', label: '悬停显示' },
@@ -340,6 +349,40 @@ const ChatAppearanceEditor: React.FC<{ theme: OSTheme; updateTheme: (u: Partial<
                         <OptionButton key={s.value} active={showTimestamp === s.value} label={s.label} onClick={() => updateTheme({ chatShowTimestamp: s.value })} />
                     ))}
                 </div>
+            </section>
+
+            {/* 白框自定义 CSS */}
+            <section className="bg-white rounded-3xl p-5 shadow-sm border border-slate-100">
+                <h2 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-1">白框自定义 (CSS)</h2>
+                <p className="text-[10px] text-slate-400 mb-3 leading-relaxed">
+                    直接写 CSS 自定义聊天「白框」——换色 / 贴图 / 圆角 / 不规则外形（clip-path）。可选择器：
+                    <code className="mx-0.5 px-1 py-0.5 bg-slate-100 rounded text-slate-500">.sully-chat-header</code>（顶栏）、
+                    <code className="mx-0.5 px-1 py-0.5 bg-slate-100 rounded text-slate-500">.sully-chat-inputbar</code>（输入栏）、
+                    <code className="mx-0.5 px-1 py-0.5 bg-slate-100 rounded text-slate-500">.sully-chat-root</code>（整屏）。覆盖默认色建议加 <code className="px-1 bg-slate-100 rounded text-slate-500">!important</code>。
+                </p>
+                <div className="flex gap-1.5 flex-wrap mb-3">
+                    {CHROME_CSS_PRESETS.map(p => (
+                        <button key={p.name}
+                            onClick={() => updateTheme({ chatChromeCustomCss: (theme.chatChromeCustomCss ? theme.chatChromeCustomCss.trimEnd() + '\n' : '') + p.code })}
+                            className="px-2.5 py-1.5 text-[11px] font-bold rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 active:scale-95 transition-all">
+                            + {p.name}
+                        </button>
+                    ))}
+                </div>
+                <textarea
+                    value={theme.chatChromeCustomCss || ''}
+                    onChange={(e) => updateTheme({ chatChromeCustomCss: e.target.value })}
+                    placeholder={'/* 例如 */\n.sully-chat-header{\n  background: linear-gradient(135deg,#ffd9ec,#d9c7ff) !important;\n  border-bottom: none !important;\n}'}
+                    spellCheck={false}
+                    rows={6}
+                    className="w-full bg-slate-900 text-slate-200 font-mono text-xs leading-relaxed p-4 rounded-2xl border border-slate-700 focus:border-primary/50 outline-none resize-y [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                />
+                {theme.chatChromeCustomCss && (
+                    <button onClick={() => updateTheme({ chatChromeCustomCss: '' })}
+                        className="mt-2 text-[11px] font-semibold text-rose-400 hover:text-rose-500">
+                        清空自定义 CSS
+                    </button>
+                )}
             </section>
 
             <div className="text-[10px] text-slate-400 text-center px-4 pb-4">

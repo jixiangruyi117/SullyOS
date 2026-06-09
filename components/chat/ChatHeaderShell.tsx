@@ -212,12 +212,13 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                           ? 'bg-white/85 backdrop-blur-xl border-b border-white/70 shadow-sm'
                           : 'bg-white/80 backdrop-blur-xl border-b border-slate-200/60 shadow-sm';
     const headerBaseHeight = headerDensity === 'compact' ? '5rem' : headerDensity === 'airy' ? '7rem' : '6rem';
-    const headerDensityClass = useCenteredLayout
-        ? (headerDensity === 'compact' ? 'px-4 py-2' : headerDensity === 'airy' ? 'px-6 py-4' : 'px-5 py-3')
-        : (headerDensity === 'compact' ? 'px-4 pb-3' : headerDensity === 'airy' ? 'px-6 pb-5' : 'px-5 pb-4');
-    const headerSafeStyle: React.CSSProperties = useCenteredLayout
-        ? { minHeight: `calc(${headerBaseHeight} + var(--safe-top))`, paddingTop: `calc(var(--safe-top) + ${headerDensity === 'compact' ? '0.5rem' : headerDensity === 'airy' ? '1rem' : '0.75rem'})` }
-        : { height: `calc(${headerBaseHeight} + var(--safe-top))` };
+    // 两种对齐都用对称 py，让内容在安全区下方垂直居中（原标准布局只给 pb → 底贴、上方留白、整体不居中）。
+    const headerDensityClass = headerDensity === 'compact' ? 'px-4 py-2' : headerDensity === 'airy' ? 'px-6 py-4' : 'px-5 py-3';
+    // 让出顶部状态栏（paddingTop = safe-top），内容在其下方约 headerBaseHeight 的可用区内垂直居中。
+    const headerSafeStyle: React.CSSProperties = {
+        minHeight: `calc(${headerBaseHeight} + var(--safe-top))`,
+        paddingTop: 'var(--safe-top)',
+    };
     const primaryTextClass = acnh ? 'text-[#6b5a3e]' : isDarkHeader ? 'text-white' : isPixelHeader ? 'text-[#fff7ed]' : 'text-slate-800';
     const secondaryTextClass = acnh ? 'text-[#5a9e7a]' : isDarkHeader ? 'text-slate-400' : isPixelHeader ? 'text-[#f3ddc7]' : 'text-slate-400';
     const iconButtonClass = acnh
@@ -366,15 +367,17 @@ const ChatHeaderShell: React.FC<ChatHeaderShellProps> = ({
                         </div>
                     )}
                 </div>
-                <div className="mt-1 h-[18px] w-full">
-                    {renderBuffRow(false)}
-                </div>
+                {buffs.length > 0 && (
+                    <div className="mt-1 w-full">
+                        {renderBuffRow(false)}
+                    </div>
+                )}
             </div>
         </>
     );
 
     return (
-        <div className={`${headerDensityClass} flex ${useCenteredLayout ? 'items-center' : 'items-end'} shrink-0 z-30 sticky top-0 relative ${headerToneClass}`} style={headerSafeStyle}>
+        <div className={`sully-chat-header ${headerDensityClass} flex items-center shrink-0 z-30 sticky top-0 relative ${headerToneClass}`} style={headerSafeStyle}>
             {/* 动森彩蛋：顶栏右下角纯色松树剪影（z-[-1] 在内容之下，不挡按钮） */}
             {acnh && !selectionMode && (
                 <svg viewBox="0 0 140 46" className="absolute right-2 bottom-[5px] h-9 w-auto pointer-events-none" style={{ zIndex: -1, opacity: 0.9 }} fill="#76b48f" aria-hidden>
