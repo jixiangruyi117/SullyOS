@@ -109,7 +109,38 @@ const TRACE_EVENT_TYPES = new Set([
   'wait_until_failed',
 ]);
 
+// 「断开后还活着多久」侦察兵: 客户端断开 SSE 后每 10s 打一条心跳,
+// 日志里最后一条 post_abort_alive 的 sinceAbortMs ≈ 平台实际给的
+// 断开后存活窗口 (CF 文档值是 30s, Deno Deploy 没有书面值, 靠这个量)。
+// 心跳一旦停了而 backup_push_sent 还没出现 = 进程在那一刻被回收。
+// 最多陪跑 5 分钟, 防止刷屏。
+const POST_ABORT_HEARTBEAT_MS = 10_000;
+const POST_ABORT_HEARTBEAT_MAX_TICKS = 30;
+const postAbortWatchers = new Map<string, ReturnType<typeof setInterval>>();
+
+function startPostAbortHeartbeat(sessionId: string): void {
+  if (postAbortWatchers.has(sessionId)) return;
+  const abortedAt = Date.now();
+  let ticks = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+    console.log('[instant-push:trace]', {
+      type: 'post_abort_alive',
+      sessionId,
+      sinceAbortMs: Date.now() - abortedAt,
+    });
+    if (ticks >= POST_ABORT_HEARTBEAT_MAX_TICKS) {
+      clearInterval(timer);
+      postAbortWatchers.delete(sessionId);
+    }
+  }, POST_ABORT_HEARTBEAT_MS);
+  postAbortWatchers.set(sessionId, timer);
+}
+
 function traceAmsgEvent(e: { type: string; [k: string]: unknown }): void {
+  if (e.type === 'sse_stream_aborted' && typeof e.sessionId === 'string') {
+    startPostAbortHeartbeat(e.sessionId);
+  }
   if (ERROR_EVENT_TYPES.has(e.type)) {
     console.error('[instant-push]', e);
     return;

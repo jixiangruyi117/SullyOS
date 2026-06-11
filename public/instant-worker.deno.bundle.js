@@ -2775,7 +2775,31 @@ var TRACE_EVENT_TYPES = /* @__PURE__ */ new Set([
   "wait_until_rejected",
   "wait_until_failed"
 ]);
+var POST_ABORT_HEARTBEAT_MS = 1e4;
+var POST_ABORT_HEARTBEAT_MAX_TICKS = 30;
+var postAbortWatchers = /* @__PURE__ */ new Map();
+function startPostAbortHeartbeat(sessionId) {
+  if (postAbortWatchers.has(sessionId)) return;
+  const abortedAt = Date.now();
+  let ticks = 0;
+  const timer = setInterval(() => {
+    ticks += 1;
+    console.log("[instant-push:trace]", {
+      type: "post_abort_alive",
+      sessionId,
+      sinceAbortMs: Date.now() - abortedAt
+    });
+    if (ticks >= POST_ABORT_HEARTBEAT_MAX_TICKS) {
+      clearInterval(timer);
+      postAbortWatchers.delete(sessionId);
+    }
+  }, POST_ABORT_HEARTBEAT_MS);
+  postAbortWatchers.set(sessionId, timer);
+}
 function traceAmsgEvent(e) {
+  if (e.type === "sse_stream_aborted" && typeof e.sessionId === "string") {
+    startPostAbortHeartbeat(e.sessionId);
+  }
   if (ERROR_EVENT_TYPES.has(e.type)) {
     console.error("[instant-push]", e);
     return;
