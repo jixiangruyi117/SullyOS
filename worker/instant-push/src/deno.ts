@@ -34,15 +34,87 @@ function readEnv(): Env {
   };
 }
 
-// waitUntil shim: 强引用兜住后台 promise, 防止被 GC; 错误就地吞掉
-// (与 CF 行为一致, 失败由 amsg-instant 自己通过 onEvent 上报)。
-const pendingBackgroundWork = new Set<Promise<unknown>>();
-const ctx = {
-  waitUntil(work: Promise<unknown>): void {
-    const tracked = work.catch(() => {});
-    pendingBackgroundWork.add(tracked);
-    tracked.finally(() => pendingBackgroundWork.delete(tracked));
-  },
-};
+// --- waitUntil shim + 自我陪跑 ---------------------------------------------
+//
+// Deno Deploy 没有 waitUntil, 且实测「最后一个在途请求结束后 <10s」实例就被
+// 回收 (杀 App 断开 SSE 后连第一条 post_abort_alive 心跳都打不出来)。
+// 对策是「自我陪跑」: 只要还有后台工作没跑完, 就向自己的公网地址发一个
+// 慢响应请求 —— 平台看到仍有在途入站请求就不会回收实例; 工作清零后陪跑
+// 请求立即结束, 不留常驻负担。
+//
+// 防御性设计:
+//   - 陪跑响应每 5s 滴一个字节, 防边缘网关 ~105s 首字节超时 (实测会 502)
+//   - 单次陪跑最长 10 分钟, 连续续期最多 3 次 — 万一有 promise 卡死,
+//     不至于无限自我请求烧配额
+//   - 自我请求失败 (平台禁止?) 则永久放弃陪跑, 避免失败重试空转
 
-Deno.serve((request: Request) => worker.fetch(request, readEnv(), ctx));
+const KEEPER_PATH = '/__amsg-keepalive';
+const KEEPER_TICK_MS = 5_000;
+const KEEPER_MAX_MS = 10 * 60_000;
+const KEEPER_MAX_CHAIN = 3;
+
+const pendingBackgroundWork = new Set<Promise<unknown>>();
+let keeperInFlight = false;
+let keeperBroken = false;
+let keeperChain = 0;
+
+function ensureKeeper(requestUrl: string): void {
+  if (keeperInFlight || keeperBroken || keeperChain >= KEEPER_MAX_CHAIN) return;
+  keeperInFlight = true;
+  keeperChain += 1;
+  fetch(new URL(KEEPER_PATH, requestUrl), { method: 'POST' })
+    .then((res) => res.text()) // 读完 body = 陪跑到对端把工作熬完
+    .then(() => {
+      keeperInFlight = false;
+      if (pendingBackgroundWork.size > 0) {
+        ensureKeeper(requestUrl); // 还有活: 续期
+      } else {
+        keeperChain = 0;
+      }
+    })
+    .catch((e) => {
+      keeperInFlight = false;
+      keeperBroken = true;
+      console.error('[deno-entry] keepalive self-request failed; giving up', e);
+    });
+}
+
+function keeperResponse(): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      async start(controller) {
+        const deadline = Date.now() + KEEPER_MAX_MS;
+        console.log('[deno-entry] keeper attached', { pending: pendingBackgroundWork.size });
+        while (pendingBackgroundWork.size > 0 && Date.now() < deadline) {
+          controller.enqueue(encoder.encode(': alive\n'));
+          await Promise.race([
+            Promise.allSettled([...pendingBackgroundWork]),
+            new Promise((resolve) => setTimeout(resolve, KEEPER_TICK_MS)),
+          ]);
+        }
+        console.log('[deno-entry] keeper released', { pending: pendingBackgroundWork.size });
+        controller.close();
+      },
+    }),
+    { headers: { 'Content-Type': 'text/plain; charset=utf-8' } },
+  );
+}
+
+Deno.serve((request: Request) => {
+  if (new URL(request.url).pathname === KEEPER_PATH) {
+    return keeperResponse();
+  }
+  // 每个请求一个 ctx: waitUntil 在收纳后台工作的同时拉起陪跑。
+  // amsg-instant 在请求一进来就注册整个 start() 的完成信号, 所以陪跑
+  // 覆盖的正是「LLM 生成 → 切段 → 推送全部送达」的完整窗口。
+  const ctx = {
+    waitUntil(work: Promise<unknown>): void {
+      const tracked = work.catch(() => {});
+      pendingBackgroundWork.add(tracked);
+      tracked.finally(() => pendingBackgroundWork.delete(tracked));
+      ensureKeeper(request.url);
+    },
+  };
+  return worker.fetch(request, readEnv(), ctx);
+});
