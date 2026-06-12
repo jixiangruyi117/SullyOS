@@ -89,3 +89,62 @@ describe('renderAndPersist 引用解析', () => {
         expect(texts[1].replyTo).toBeFalsy();
     }, 20000);
 });
+
+// 历史里引用消息被 buildMessageHistory 渲染成 [xx引用了xx说的「…」，并回复了 ↓]，
+// 模型会模仿这个渲染格式而不是规范的 [[QUOTE:]]。修复前这种输出既不被识别成引用、
+// 整段方括号还会原样漏进气泡；修复后认作合法引用并剥干净。
+describe('renderAndPersist 模仿历史渲染格式的引用兜底', () => {
+    it('[我引用了你说的「…」，并回复了 ↓] 单独成行时解析为引用并顺延到正文气泡', async () => {
+        const charId = `c-nlquote-${Date.now()}`;
+        const raw = '[我引用了你说的「引用我说的话」，并回复了 ↓]\n你干嘛去了';
+
+        await applyAssistantPostProcessing(raw, makeCtx(charId, [{ ...quotedUserMsg, charId }]));
+
+        const msgs = await DB.getRecentMessagesByCharId(charId, 50);
+        const texts = msgs.filter(m => m.role === 'assistant' && m.type === 'text');
+        expect(texts.length).toBe(1);
+        expect(texts[0].content).toBe('你干嘛去了');
+        expect(texts[0].replyTo?.id).toBe(101);
+        expect(texts[0].replyTo!.name).toBe('我');
+    }, 20000);
+
+    it('引用摘要带截断省略号时仍能匹配到原消息', async () => {
+        const charId = `c-nlquote-ellipsis-${Date.now()}`;
+        const raw = '[用户引用了你之前说的「引用我说的话，还有后面一长…」，并回复了 ↓]\n哈哈这个';
+
+        await applyAssistantPostProcessing(raw, makeCtx(charId, [{ ...quotedUserMsg, charId }]));
+
+        const msgs = await DB.getRecentMessagesByCharId(charId, 50);
+        const texts = msgs.filter(m => m.role === 'assistant' && m.type === 'text');
+        expect(texts.length).toBe(1);
+        expect(texts[0].content).toBe('哈哈这个');
+        expect(texts[0].replyTo?.id).toBe(101);
+    }, 20000);
+
+    it('与正文同一行时引用挂在该气泡且方括号头不漏进正文', async () => {
+        const charId = `c-nlquote-inline-${Date.now()}`;
+        const raw = '[你引用了对方说的「引用我说的话」，并回复了 ↓] 这就解释';
+
+        await applyAssistantPostProcessing(raw, makeCtx(charId, [{ ...quotedUserMsg, charId }]));
+
+        const msgs = await DB.getRecentMessagesByCharId(charId, 50);
+        const texts = msgs.filter(m => m.role === 'assistant' && m.type === 'text');
+        expect(texts.length).toBe(1);
+        expect(texts[0].content).toBe('这就解释');
+        expect(texts[0].content).not.toContain('引用了');
+        expect(texts[0].replyTo?.id).toBe(101);
+    }, 20000);
+
+    it('正常含方括号但非引用格式的句子不被误剥', async () => {
+        const charId = `c-nlquote-fp-${Date.now()}`;
+        const raw = '我看了[那本书]感觉一般';
+
+        await applyAssistantPostProcessing(raw, makeCtx(charId, [{ ...quotedUserMsg, charId }]));
+
+        const msgs = await DB.getRecentMessagesByCharId(charId, 50);
+        const texts = msgs.filter(m => m.role === 'assistant' && m.type === 'text');
+        expect(texts.length).toBe(1);
+        expect(texts[0].content).toBe('我看了[那本书]感觉一般');
+        expect(texts[0].replyTo).toBeFalsy();
+    }, 20000);
+});
