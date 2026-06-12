@@ -2340,7 +2340,7 @@ var stripChineseDate = (t) => t.replace(/\[\d{4}[-/年]\d{1,2}[-/月]\d{1,2}.*?\
 var stripRoleNamePrefix = (t) => t.replace(/^[\w一-龥]+:\s*/, "");
 var stripBusinessTagsForBubble = (t) => t.replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END|MUSIC_ACTION)[:\s][\s\S]*?\]\]/g, "").replace(/\[schedule_message[^\]]*\]/g, "");
 var stripBusinessTagsForNotification = (t) => stripBusinessTagsForBubble(t).replace(/\[\[(?:READ_NOTE|XHS_[A-Z_]+)[:\s][\s\S]*?\]\]/g, "").replace(/\[\[XHS_[A-Z_]+\]\]/g, "");
-var stripQuotes = (t) => t.replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, "").replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, "").replace(/\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g, "").replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[\s\S]*?」[^\[\]\n]{0,24}\]\s*/g, "");
+var stripQuotes = (t) => t.replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, "").replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, "").replace(/\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g, "").replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, "");
 var stripMarkdownHeaders = (t) => t.replace(/^#{1,6}\s+/gm, "");
 var stripMarkdownBold = (t) => t.replace(/\*{2,}/g, "");
 var stripMarkdownDividers = (t) => t.replace(/^\s*---\s*$/gm, "").replace(/^\s*[-*+]\s*$/gm, "");

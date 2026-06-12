@@ -2045,7 +2045,7 @@ const MessageItem = React.memo(({
         .replace(/\s*\[(?:聊天|通话|约会)\]\s*/g, '\n')   // source tags leaked from history context
         .replace(/\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g, '')  // residual double-bracket quotes (incl. typos & Chinese)
         .replace(/\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g, '')     // residual single-bracket quotes (incl. typos & Chinese)
-        .replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[\s\S]*?」[^\[\]\n]{0,24}\]\s*/g, '')  // imitated history render [xx引用了xx说的「…」，并回复了 ↓]
+        .replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, '')  // imitated history render [xx引用了xx说的「…」，并回复了 ↓]
         .replace(/\[回复\s*[""\u201C][^""\u201D]*?[""\u201D](?:\.{0,3})\]\s*[：:]?\s*/g, '')  // [回复 "content"]: format
         // Residual action/system tags that may have leaked through
         .replace(/\[\[(?:ACTION|RECALL|SEARCH|DIARY|READ_DIARY|FS_DIARY|FS_READ_DIARY|SEND_EMOJI|DIARY_START|DIARY_END|FS_DIARY_START|FS_DIARY_END)[:\s][\s\S]*?\]\]/g, '')

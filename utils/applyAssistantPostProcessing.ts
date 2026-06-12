@@ -420,11 +420,12 @@ export async function applyAssistantPostProcessing(
     // 历史里引用消息被渲染成 [xx引用了xx说的「…」，并回复了 ↓]（chatPrompts.buildMessageHistory），
     // 模型会模仿这个渲染格式而不是规范的 [[QUOTE:]] —— 把它也认作合法引用，否则既丢引用
     // 又把整段方括号原样漏进气泡。「」是该渲染格式的硬锚点，配合"引用了"双锚降低误报。
-    const QUOTE_RE_NL = /\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「([\s\S]*?)」[^\[\]\n]{0,24}\]\s*/;
+    // 引用摘要被截断成单行，「」内用 [^」\n]*? 限制在同一行：缺闭合 」 时不会跨行吞掉正文段落。
+    const QUOTE_RE_NL = /\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「([^」\n]*?)」[^\[\]\n]{0,24}\]\s*/;
     const QUOTE_CLEAN_DOUBLE = /\[\[(?:QU[OA]TE|引用)[：:][\s\S]*?\]\]/g;
     const QUOTE_CLEAN_SINGLE = /\[(?:QU[OA]TE|引用)[：:][^\]]*\]/g;
     const REPLY_CLEAN_CN = /\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g;
-    const QUOTE_CLEAN_NL = /\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[\s\S]*?」[^\[\]\n]{0,24}\]\s*/g;
+    const QUOTE_CLEAN_NL = /\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g;
 
     // 抽取思考链 (showThinkingChain 开启时): reasoning_content + 内联 <think> 块。
     const extractThinkingChain = (dataObj: any, reasoningOverride?: string): string | null => {

@@ -70,7 +70,7 @@ const stripQuotes = (t: string): string =>
     .replace(/\[回复\s*[""“][^""”]*?[""”](?:\.{0,3})\]\s*[：:]?\s*/g, '')
     // buildMessageHistory 把引用渲染成 [xx引用了xx说的「…」，并回复了 ↓]，模型会学这个格式输出。
     // 解析端 (applyAssistantPostProcessing QUOTE_RE_NL) 已把它认作引用，这里保证残留不漏进气泡/通知。
-    .replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[\s\S]*?」[^\[\]\n]{0,24}\]\s*/g, '');
+    .replace(/\[[^\[\]\n「」]{0,24}引用了[^\[\]\n「」]{0,24}「[^」\n]*?」[^\[\]\n]{0,24}\]\s*/g, '');
 
 /** markdown 标题 `# heading` → `heading` (保留文字) */
 const stripMarkdownHeaders = (t: string): string => t.replace(/^#{1,6}\s+/gm, '');
